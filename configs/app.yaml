@@ -1,0 +1,10 @@
+app:
+  data_dir: data
+  target_keyword: 你好小智
+
+export:
+  default_audio_mode: reference_original_path
+
+eval_project:
+  root: ""
+  manifest_dir: sherpa_eval/data

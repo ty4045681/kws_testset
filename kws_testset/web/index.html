@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KWS Testset Platform</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; line-height: 1.5; }
+    code, pre { background: #f5f5f5; padding: 0.2rem 0.4rem; border-radius: 4px; }
+    section { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    button { padding: 0.4rem 0.8rem; }
+  </style>
+</head>
+<body>
+  <h1>KWS Testset Platform</h1>
+  <p>本页面是第一版最小 Web 壳。核心能力通过 API 提供，交互可先使用 Swagger UI：<a href="/docs">/docs</a>。</p>
+
+  <section>
+    <h2>Health</h2>
+    <button onclick="loadHealth()">检查服务</button>
+    <pre id="health">未检查</pre>
+  </section>
+
+  <section>
+    <h2>Taxonomy</h2>
+    <button onclick="loadTaxonomy()">加载枚举</button>
+    <pre id="taxonomy">未加载</pre>
+  </section>
+
+  <section>
+    <h2>常用 API</h2>
+    <ul>
+      <li><code>POST /api/imports/scan</code> 扫描 wav</li>
+      <li><code>POST /api/imports</code> 导入 source + original variant</li>
+      <li><code>GET /api/assets</code> 查看资产</li>
+      <li><code>POST /api/dataset-specs</code> 创建测试集规格</li>
+      <li><code>POST /api/dataset-specs/{id}/build</code> 构建版本</li>
+      <li><code>POST /api/dataset-versions/{id}/export</code> 导出 manifest</li>
+    </ul>
+  </section>
+
+  <script>
+    async function loadHealth() {
+      const response = await fetch('/api/health');
+      document.getElementById('health').textContent = JSON.stringify(await response.json(), null, 2);
+    }
+    async function loadTaxonomy() {
+      const response = await fetch('/api/taxonomy');
+      document.getElementById('taxonomy').textContent = JSON.stringify(await response.json(), null, 2);
+    }
+  </script>
+</body>
+</html>
