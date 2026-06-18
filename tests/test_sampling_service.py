@@ -1,3 +1,5 @@
+import pytest
+
 from kws_testset.services.sampling_service import ManualOverrideInput, SampleCandidate, sample_candidates
 
 
@@ -45,3 +47,14 @@ def test_sampling_reports_shortfall_without_backfilling_other_types():
 
     assert result.counts_by_sample_type["similar_negative"] == 1
     assert result.shortfalls == {"similar_negative": 2, "wake_positive": 2}
+
+
+def test_sampling_rejects_manual_includes_that_exceed_quota():
+    candidates = [candidate(1, "wake_positive"), candidate(2, "wake_positive")]
+    overrides = [
+        ManualOverrideInput(variant_id="var_1", action="include", reason="anchor"),
+        ManualOverrideInput(variant_id="var_2", action="include", reason="anchor"),
+    ]
+
+    with pytest.raises(ValueError, match="manual includes exceed quota"):
+        sample_candidates(candidates, {"wake_positive": 1}, ["gender"], 123, overrides)

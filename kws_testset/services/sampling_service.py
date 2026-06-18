@@ -87,6 +87,8 @@ def sample_candidates(
         type_candidates = [item for item in candidates if item.sample_type == sample_type and item.id not in excluded]
         manual_items = [item for item_id, item in by_id.items() if item_id in included and item.sample_type == sample_type and item.id not in excluded]
         manual_items = sorted(manual_items, key=lambda item: item.id)
+        if len(manual_items) > quota:
+            raise ValueError(f"manual includes exceed quota for {sample_type}: {len(manual_items)} includes for quota {quota}")
 
         for item in manual_items[:quota]:
             selected.append(SelectedSample(item.id, sample_type, "manual_include", rank))

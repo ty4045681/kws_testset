@@ -54,6 +54,9 @@ def validate_ready_metadata(metadata: dict[str, object], duration_sec: float, ta
     quality_status = str(metadata.get("quality_status", "draft"))
     if quality_status not in QUALITY_STATUSES:
         errors.append(f"unknown quality_status: {quality_status}")
+    sample_type = str(metadata.get("sample_type", ""))
+    if sample_type not in SAMPLE_TYPES:
+        errors.append(f"unknown sample_type: {sample_type}")
     if quality_status != "ready":
         return ValidationResult(ok=len(errors) == 0, errors=errors, warnings=warnings)
 
@@ -64,7 +67,6 @@ def validate_ready_metadata(metadata: dict[str, object], duration_sec: float, ta
         errors.append("ready duration_sec must be greater than 0")
 
     enum_fields = {
-        "sample_type": SAMPLE_TYPES,
         "voice_source": VOICE_SOURCES,
         "gender": GENDERS,
         "age_group": AGE_GROUPS,

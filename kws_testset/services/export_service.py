@@ -61,7 +61,7 @@ def export_dataset(
     coverage_summary_path.write_text(json.dumps(coverage_summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     negative_duration = sum(item.duration for item in items if item.sample_type in NEGATIVE_SAMPLE_TYPES)
-    negative_hours = round(negative_duration / 3600.0, 3)
+    negative_hours = round(negative_duration / 3600.0, 6)
     version_name = f"{dataset_name}_v{version:03d}"
     dataset_yaml = {
         "dataset": {

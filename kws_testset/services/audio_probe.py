@@ -24,6 +24,8 @@ def probe_wav(path: str | Path) -> AudioProbe:
         channels = wav.getnchannels()
         sample_width = wav.getsampwidth()
         frame_count = wav.getnframes()
+    if sample_rate <= 0:
+        raise ValueError(f"invalid WAV sample_rate: {sample_rate}")
     duration_sec = frame_count / float(sample_rate)
     return AudioProbe(
         path=wav_path,
