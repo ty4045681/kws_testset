@@ -324,9 +324,16 @@ GET  /api/imports/{id}
 
 - 接收浏览器 `multipart/form-data` 多 WAV 文件。
 - 保存上传文件到受控 staging 目录，例如 `data/uploads/{upload_id}/`；正式提交时再复用现有导入服务复制到 `data/library/sources/`。
+- MVP 中 staging 目录提交后暂不自动删除，用于导入失败排查和重试；清理策略后续单独设计。
 - 对每个文件做 WAV probe 和 sha256。
 - 返回每行文件的探测结果、重复状态、初始 metadata、字段错误。
 - 允许部分文件失败，失败行留在 response 中。
+
+`POST /api/imports` 增强：
+
+- 默认保持现有原子提交语义：提交的行只要有一行非法，整批失败并回滚。
+- UI 提交 staging 成功行时使用 `partial=true`，后端逐行校验并跳过非法行。
+- `partial=true` response 返回 `failed_count` 和逐行 `status/errors`，用于 UI 标记哪些行没有入库。
 
 `GET /api/imports`：
 
@@ -424,7 +431,7 @@ Browser FileList
 - 导入的当前 wav 都视为原声，生成 `variant_kind=original`。
 - 仍保留 `source` / `variant` 分离，为后续 C 的增强音频做准备。
 - 重复 hash 不应静默导入重复资产。
-- 用户可以跳过失败行，提交成功行。
+- 用户可以跳过失败行，提交成功行；UI 通过 `POST /api/imports` 的 `partial=true` 模式实现，不改变默认原子导入路径。
 
 ### 7.2 Asset Edit Flow
 
@@ -482,7 +489,7 @@ Ready assets
 行为：
 
 - 整批上传不因单个文件失败而完全失败。
-- 提交入库时可以只提交有效行。
+- UI 提交入库时可以只提交有效行；当用户要求继续时，后端 `partial=true` 模式会逐行跳过非法 metadata 并返回字段级错误。
 
 ### 8.2 Validation Errors
 

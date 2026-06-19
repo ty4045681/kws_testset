@@ -17,7 +17,7 @@ This plan implements one cohesive subsystem: the first full platform UI and the 
 The plan produces working software after every task:
 
 1. Backend static serving and dependency setup.
-2. Upload/import listing APIs.
+2. Upload/import listing APIs and explicit partial commit mode.
 3. Asset edit/audio APIs.
 4. Dataset preview/list/detail APIs.
 5. Frontend scaffold, layout, API client, and types.
@@ -39,8 +39,10 @@ Backend:
 /Users/e4/Documents/kws_testset/kws_testset/api/imports.py
 /Users/e4/Documents/kws_testset/kws_testset/api/assets.py
 /Users/e4/Documents/kws_testset/kws_testset/api/datasets.py
+/Users/e4/Documents/kws_testset/kws_testset/services/import_service.py
 /Users/e4/Documents/kws_testset/kws_testset/services/import_upload_service.py
 /Users/e4/Documents/kws_testset/kws_testset/services/asset_service.py
+/Users/e4/Documents/kws_testset/kws_testset/services/dataset_selection_service.py
 /Users/e4/Documents/kws_testset/kws_testset/services/dataset_preview_service.py
 ```
 
@@ -274,13 +276,16 @@ Create `/Users/e4/Documents/kws_testset/frontend/package.json`:
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "latest",
-    "react": "latest",
-    "react-dom": "latest"
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "typescript": "5.6.3",
+    "vite": "5.4.11"
+  }
 }
 ```
 
@@ -316,7 +321,7 @@ Create `/Users/e4/Documents/kws_testset/frontend/tsconfig.json`:
     "strict": true,
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
-    "moduleResolution": "Node",
+    "moduleResolution": "Bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
@@ -473,10 +478,11 @@ git commit -m "feat: scaffold React UI and static serving"
 
 ---
 
-### Task 2: Browser WAV Upload and Import Batch Browse APIs
+### Task 2: Browser WAV Upload, Partial Commit, and Import Batch Browse APIs
 
 **Files:**
 - Create: `/Users/e4/Documents/kws_testset/kws_testset/services/import_upload_service.py`
+- Modify: `/Users/e4/Documents/kws_testset/kws_testset/services/import_service.py`
 - Modify: `/Users/e4/Documents/kws_testset/kws_testset/api/imports.py`
 - Create: `/Users/e4/Documents/kws_testset/tests/test_upload_import_api.py`
 
@@ -564,6 +570,60 @@ def test_import_batches_can_be_listed_and_fetched(client, wav_factory):
     assert detail_response.status_code == 200
     assert detail_response.json()["id"] == batch_id
     assert detail_response.json()["imported_count"] == 1
+
+
+def test_partial_commit_imports_valid_rows_and_reports_invalid_rows(client, wav_factory):
+    valid_path = wav_factory("partial_valid.wav")
+    invalid_path = wav_factory("partial_invalid.wav")
+
+    response = client.post(
+        "/api/imports",
+        json={
+            "name": "partial_commit_case",
+            "partial": True,
+            "files": [
+                {
+                    "path": str(valid_path),
+                    "text": "你好小智",
+                    "sample_type": "wake_positive",
+                    "quality_status": "ready",
+                    "voice_source": "human",
+                    "gender": "female",
+                    "age_group": "adult",
+                    "volume": "normal",
+                    "pitch": "normal",
+                    "speed": "normal",
+                    "noise_scene": "clean",
+                    "impairment_type": "none",
+                },
+                {
+                    "path": str(invalid_path),
+                    "text": "",
+                    "sample_type": "wake_positive",
+                    "quality_status": "ready",
+                    "voice_source": "human",
+                    "gender": "female",
+                    "age_group": "adult",
+                    "volume": "normal",
+                    "pitch": "normal",
+                    "speed": "normal",
+                    "noise_scene": "clean",
+                    "impairment_type": "none",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["imported_count"] == 1
+    assert payload["failed_count"] == 1
+    assert payload["files"][0]["status"] == "imported"
+    assert payload["files"][1]["status"] == "error"
+    assert "ready text is required" in payload["files"][1]["errors"]
+    assets = client.get("/api/assets").json()["items"]
+    assert len(assets) == 1
+    assert assets[0]["text"] == "你好小智"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -575,6 +635,7 @@ uv run python -m pytest tests/test_upload_import_api.py -v
 ```
 
 Expected: FAIL with 404 for `/api/imports/uploads` or `/api/imports` GET.
+The partial commit test may instead fail with 400 until `partial=true` support is added.
 
 - [ ] **Step 3: Implement upload service**
 
@@ -616,8 +677,6 @@ def safe_upload_filename(filename: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
     if not cleaned:
         cleaned = "upload.wav"
-    if not cleaned.lower().endswith(".wav"):
-        cleaned = f"{cleaned}.wav"
     return cleaned
 
 
@@ -628,14 +687,16 @@ def save_uploads(files: list[UploadFile], config: AppConfig, session: Session) -
     rows: list[UploadedAudioRow] = []
 
     for index, upload in enumerate(files):
-        filename = safe_upload_filename(upload.filename or f"upload_{index}.wav")
+        original_filename = upload.filename or f"upload_{index}.wav"
+        filename = safe_upload_filename(original_filename)
         destination = upload_dir / filename
-        with destination.open("wb") as output:
-            shutil.copyfileobj(upload.file, output)
 
         if not filename.lower().endswith(".wav"):
-            rows.append(UploadedAudioRow(destination, filename, 0.0, 0, 0, 0, "error", "Only WAV files are supported"))
+            rows.append(UploadedAudioRow(destination, original_filename, 0.0, 0, 0, 0, "error", "Only WAV files are supported"))
             continue
+
+        with destination.open("wb") as output:
+            shutil.copyfileobj(upload.file, output)
 
         try:
             probe = probe_wav(destination)
@@ -661,7 +722,119 @@ def save_uploads(files: list[UploadFile], config: AppConfig, session: Session) -
     return upload_id, rows
 ```
 
-- [ ] **Step 4: Add upload and import browse routes**
+- [ ] **Step 4: Add partial import commit service**
+
+Modify `/Users/e4/Documents/kws_testset/kws_testset/services/import_service.py` by keeping the existing atomic `commit_import_batch()` and adding these dataclasses plus `commit_import_batch_partial()` below it:
+
+```python
+@dataclass(frozen=True)
+class ImportFileCommitResult:
+    path: str
+    status: str
+    errors: list[str]
+
+
+@dataclass(frozen=True)
+class PartialImportResult:
+    batch: ImportBatch
+    files: list[ImportFileCommitResult]
+
+
+def commit_import_batch_partial(name: str, files: list[dict[str, Any]], config: AppConfig, session: Session) -> PartialImportResult:
+    batch_id = new_id("imp")
+    batch = ImportBatch(id=batch_id, name=name, file_count=len(files), status="imported")
+    session.add(batch)
+
+    source_root = config.app.data_dir / "library" / "sources"
+    source_root.mkdir(parents=True, exist_ok=True)
+
+    imported_count = 0
+    duplicate_count = 0
+    failed_count = 0
+    copied_paths: list[Path] = []
+    results: list[ImportFileCommitResult] = []
+    try:
+        for item in files:
+            path_text = str(item["path"])
+            try:
+                probe = probe_wav(item["path"])
+            except (OSError, EOFError, ValueError, wave.Error):
+                failed_count += 1
+                results.append(ImportFileCommitResult(path_text, "error", [f"invalid WAV file: {path_text}"]))
+                continue
+            existing = session.exec(select(AudioSource).where(AudioSource.sha256 == probe.sha256)).first()
+            if existing:
+                duplicate_count += 1
+                results.append(ImportFileCommitResult(path_text, "duplicate", []))
+                continue
+
+            ready_check = validate_ready_metadata(item, probe.duration_sec, config.app.target_keyword)
+            if not ready_check.ok:
+                failed_count += 1
+                results.append(ImportFileCommitResult(path_text, "error", ready_check.errors))
+                continue
+
+            source_id = dated_id("src", probe.sha256)
+            variant_id = dated_id("var", probe.sha256)
+            stored_path = source_root / f"{source_id}.wav"
+            shutil.copy2(probe.path, stored_path)
+            copied_paths.append(stored_path)
+
+            source = AudioSource(
+                id=source_id,
+                original_filename=probe.path.name,
+                stored_path=str(stored_path.resolve()),
+                sha256=probe.sha256,
+                duration_sec=probe.duration_sec,
+                sample_rate=probe.sample_rate,
+                channels=probe.channels,
+                bit_depth=probe.bit_depth,
+                import_batch_id=batch_id,
+            )
+            variant = AudioVariant(
+                id=variant_id,
+                source_id=source_id,
+                variant_kind="original",
+                stored_path=str(stored_path.resolve()),
+                sha256=probe.sha256,
+                duration_sec=probe.duration_sec,
+                sample_rate=probe.sample_rate,
+                channels=probe.channels,
+                text=item["text"],
+                normalized_text=normalize_text(item["text"]),
+                sample_type=item["sample_type"],
+                quality_status=item.get("quality_status", "draft"),
+                voice_source=item.get("voice_source", "unknown"),
+                gender=item.get("gender", "unknown"),
+                age_group=item.get("age_group", "unknown"),
+                volume=item.get("volume", "unknown"),
+                pitch=item.get("pitch", "unknown"),
+                speed=item.get("speed", "unknown"),
+                noise_scene=item.get("noise_scene", "unknown"),
+                impairment_type=item.get("impairment_type", "none"),
+                notes=item.get("notes"),
+            )
+            session.add(source)
+            session.add(variant)
+            imported_count += 1
+            results.append(ImportFileCommitResult(path_text, "imported", []))
+
+        batch.imported_count = imported_count
+        batch.duplicate_count = duplicate_count
+        batch.status = "imported" if failed_count == 0 else "partial"
+        batch.completed_at = datetime.now(timezone.utc)
+        session.add(batch)
+        session.commit()
+    except Exception:
+        session.rollback()
+        for path in copied_paths:
+            path.unlink(missing_ok=True)
+        raise
+    session.refresh(batch)
+    return PartialImportResult(batch=batch, files=results)
+```
+
+- [ ] **Step 5: Add upload, partial commit, and import browse routes**
 
 Modify `/Users/e4/Documents/kws_testset/kws_testset/api/imports.py`:
 
@@ -672,10 +845,70 @@ from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from sqlmodel import Session, select
 
 from kws_testset.models.import_batch import ImportBatch
+from kws_testset.services.import_service import commit_import_batch, commit_import_batch_partial, scan_wav_paths
 from kws_testset.services.import_upload_service import save_uploads
 ```
 
-- Keep existing request models and existing `scan_imports` / `commit_import` routes.
+- Add `partial` to `CommitImportRequest`:
+
+```python
+class CommitImportRequest(BaseModel):
+    name: str
+    files: list[ImportFileRequest]
+    partial: bool = False
+```
+
+- Replace the existing `commit_import` route with:
+
+```python
+@router.post("")
+def commit_import(payload: CommitImportRequest, request: Request) -> dict[str, Any]:
+    engine = request.app.state.engine
+    config = request.app.state.config
+    if payload.partial:
+        with Session(engine) as session:
+            result = commit_import_batch_partial(
+                name=payload.name,
+                files=[item.model_dump() for item in payload.files],
+                config=config,
+                session=session,
+            )
+        batch = result.batch
+        return {
+            "id": batch.id,
+            "name": batch.name,
+            "imported_count": batch.imported_count,
+            "duplicate_count": batch.duplicate_count,
+            "failed_count": sum(1 for item in result.files if item.status == "error"),
+            "status": batch.status,
+            "files": [
+                {"path": item.path, "status": item.status, "errors": item.errors}
+                for item in result.files
+            ],
+        }
+
+    try:
+        with Session(engine) as session:
+            batch = commit_import_batch(
+                name=payload.name,
+                files=[item.model_dump() for item in payload.files],
+                config=config,
+                session=session,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "id": batch.id,
+        "name": batch.name,
+        "imported_count": batch.imported_count,
+        "duplicate_count": batch.duplicate_count,
+        "failed_count": 0,
+        "status": batch.status,
+        "files": [],
+    }
+```
+
+- Keep existing `scan_imports` route.
 - Add helper and routes before or after existing routes:
 
 ```python
@@ -736,7 +969,7 @@ def get_import_batch(batch_id: str, request: Request) -> dict[str, Any]:
     return _batch_payload(batch)
 ```
 
-- [ ] **Step 5: Run upload/import tests and existing import tests**
+- [ ] **Step 6: Run upload/import tests and existing import tests**
 
 Run:
 
@@ -746,10 +979,10 @@ uv run python -m pytest tests/test_upload_import_api.py tests/test_import_and_as
 
 Expected: all selected tests pass.
 
-- [ ] **Step 6: Commit Task 2**
+- [ ] **Step 7: Commit Task 2**
 
 ```bash
-git add kws_testset/services/import_upload_service.py kws_testset/api/imports.py tests/test_upload_import_api.py
+git add kws_testset/services/import_upload_service.py kws_testset/services/import_service.py kws_testset/api/imports.py tests/test_upload_import_api.py
 git commit -m "feat: add browser upload import APIs"
 ```
 
@@ -773,6 +1006,7 @@ from kws_testset.models.audio import AudioVariant
 
 
 def _import_ready_asset(client, wav_factory, name="asset_edit.wav") -> str:
+    before = {item["id"] for item in client.get("/api/assets").json()["items"]}
     wav_path = wav_factory(name)
     response = client.post(
         "/api/imports",
@@ -797,7 +1031,10 @@ def _import_ready_asset(client, wav_factory, name="asset_edit.wav") -> str:
         },
     )
     assert response.status_code == 200
-    return client.get("/api/assets").json()["items"][0]["id"]
+    after = client.get("/api/assets").json()["items"]
+    created = [item for item in after if item["id"] not in before]
+    assert len(created) == 1
+    return created[0]["id"]
 
 
 def test_patch_asset_updates_metadata_and_normalized_text(client, wav_factory):
@@ -844,6 +1081,32 @@ def test_bulk_update_reports_per_asset_results(client, wav_factory):
         assert session.get(AudioVariant, second).noise_scene == "office"
 
 
+def test_bulk_update_preserves_success_when_later_existing_asset_fails(client, wav_factory):
+    first = _import_ready_asset(client, wav_factory, "bulk_savepoint_good.wav")
+    second = _import_ready_asset(client, wav_factory, "bulk_savepoint_bad.wav")
+    setup = client.patch(
+        f"/api/assets/{first}",
+        json={"text": "你好小志", "sample_type": "similar_negative", "quality_status": "ready"},
+    )
+    assert setup.status_code == 200
+
+    response = client.post(
+        "/api/assets/bulk-update",
+        json={"asset_ids": [first, second], "patch": {"sample_type": "ordinary_negative"}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated"] == 1
+    assert payload["failed"] == 1
+    assert payload["results"][first]["ok"] is True
+    assert payload["results"][second]["ok"] is False
+    assert "ordinary_negative text must not contain target keyword" in payload["results"][second]["errors"]
+    with Session(client.app.state.engine) as session:
+        assert session.get(AudioVariant, first).sample_type == "ordinary_negative"
+        assert session.get(AudioVariant, second).sample_type == "wake_positive"
+
+
 def test_asset_audio_endpoint_streams_wav(client, wav_factory):
     asset_id = _import_ready_asset(client, wav_factory, "playable.wav")
 
@@ -856,7 +1119,7 @@ def test_asset_audio_endpoint_streams_wav(client, wav_factory):
 
 def test_assets_filter_by_sample_type(client, wav_factory):
     _import_ready_asset(client, wav_factory, "filter_positive.wav")
-    asset_id = client.get("/api/assets").json()["items"][0]["id"]
+    asset_id = _import_ready_asset(client, wav_factory, "filter_negative.wav")
     client.patch(f"/api/assets/{asset_id}", json={"text": "你好小志", "sample_type": "similar_negative"})
 
     response = client.get("/api/assets?sample_type=similar_negative")
@@ -864,6 +1127,22 @@ def test_assets_filter_by_sample_type(client, wav_factory):
     assert response.status_code == 200
     assert len(response.json()["items"]) == 1
     assert response.json()["items"][0]["sample_type"] == "similar_negative"
+
+
+def test_assets_filter_before_pagination(client, wav_factory):
+    _import_ready_asset(client, wav_factory, "page_positive_one.wav")
+    _import_ready_asset(client, wav_factory, "page_positive_two.wav")
+    asset_id = _import_ready_asset(client, wav_factory, "page_negative.wav")
+    patch = client.patch(f"/api/assets/{asset_id}", json={"text": "你好小志", "sample_type": "similar_negative"})
+    assert patch.status_code == 200
+
+    response = client.get("/api/assets?sample_type=similar_negative&limit=1&offset=0")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["count"] == 1
+    assert payload["total"] == 1
+    assert payload["items"][0]["id"] == asset_id
 ```
 
 - [ ] **Step 2: Run asset API tests to verify they fail**
@@ -992,6 +1271,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from kws_testset.models.audio import AudioVariant
@@ -1044,14 +1324,19 @@ def _extract_patch(payload: AssetPatchRequest) -> dict[str, Any]:
 def list_assets(request: Request, limit: int = 200, offset: int = 0) -> dict[str, Any]:
     engine = request.app.state.engine
     config = request.app.state.config
-    query = select(AudioVariant).order_by(AudioVariant.created_at).offset(offset).limit(limit)
+    query = select(AudioVariant)
+    count_query = select(func.count()).select_from(AudioVariant)
     query_params = dict(request.query_params)
-    with Session(engine) as session:
-        variants = session.exec(query).all()
     for field, value in query_params.items():
         if field in FILTERABLE_FIELDS:
-            variants = [item for item in variants if str(getattr(item, field)) == value]
-    return {"items": [asset_payload(item, config) for item in variants], "limit": limit, "offset": offset, "count": len(variants)}
+            condition = getattr(AudioVariant, field) == value
+            query = query.where(condition)
+            count_query = count_query.where(condition)
+    query = query.order_by(AudioVariant.created_at).offset(offset).limit(limit)
+    with Session(engine) as session:
+        variants = session.exec(query).all()
+        total = session.exec(count_query).one()
+    return {"items": [asset_payload(item, config) for item in variants], "limit": limit, "offset": offset, "count": len(variants), "total": total}
 
 
 @router.patch("/{asset_id}")
@@ -1079,20 +1364,27 @@ def bulk_update_assets(payload: BulkUpdateRequest, request: Request) -> dict[str
     failed = 0
     with Session(request.app.state.engine) as session:
         for asset_id in payload.asset_ids:
-            item = session.get(AudioVariant, asset_id)
-            if item is None:
-                failed += 1
-                results[asset_id] = {"ok": False, "errors": ["asset not found"], "warnings": []}
-                continue
-            validation = apply_asset_patch(item, payload.patch, config)
-            if validation.ok:
-                updated += 1
+            savepoint = session.begin_nested()
+            try:
+                item = session.get(AudioVariant, asset_id)
+                if item is None:
+                    savepoint.rollback()
+                    failed += 1
+                    results[asset_id] = {"ok": False, "errors": ["asset not found"], "warnings": []}
+                    continue
+                validation = apply_asset_patch(item, payload.patch, config)
+                if not validation.ok:
+                    savepoint.rollback()
+                    failed += 1
+                    results[asset_id] = {"ok": False, "errors": validation.errors, "warnings": validation.warnings}
+                    continue
                 session.add(item)
+                savepoint.commit()
+                updated += 1
                 results[asset_id] = {"ok": True, "errors": [], "warnings": validation.warnings}
-            else:
-                failed += 1
-                session.rollback()
-                results[asset_id] = {"ok": False, "errors": validation.errors, "warnings": validation.warnings}
+            except Exception:
+                savepoint.rollback()
+                raise
         session.commit()
     return {"updated": updated, "failed": failed, "results": results}
 
@@ -1132,6 +1424,7 @@ git commit -m "feat: add asset edit and playback APIs"
 ### Task 4: Dataset Spec Browse, Preview, Version Browse, and Items APIs
 
 **Files:**
+- Create: `/Users/e4/Documents/kws_testset/kws_testset/services/dataset_selection_service.py`
 - Create: `/Users/e4/Documents/kws_testset/kws_testset/services/dataset_preview_service.py`
 - Modify: `/Users/e4/Documents/kws_testset/kws_testset/api/datasets.py`
 - Create: `/Users/e4/Documents/kws_testset/tests/test_dataset_browse_api.py`
@@ -1190,6 +1483,44 @@ def test_preview_reports_shortfalls_without_creating_version(client, wav_factory
     assert versions.json()["items"] == []
 
 
+def test_preview_and_build_both_include_manual_include_outside_filter(client, wav_factory):
+    import_asset(client, wav_factory, "preview_filter_hit.wav", "你好小智", "wake_positive")
+    import_asset(client, wav_factory, "preview_manual_include.wav", "你好小智 手动", "wake_positive")
+    assets = client.get("/api/assets").json()["items"]
+    manual_id = next(item["id"] for item in assets if item["text"] == "你好小智 手动")
+    patch = client.patch(f"/api/assets/{manual_id}", json={"gender": "male"})
+    assert patch.status_code == 200
+    spec_response = client.post(
+        "/api/dataset-specs",
+        json={
+            "name": "preview_manual_include",
+            "description": "preview should match build for manual includes",
+            "target_keyword": "你好小智",
+            "sampling_seed": 7,
+            "quotas": {"wake_positive": 2},
+            "filters": {"quality_status": ["ready"], "gender": ["female"]},
+            "balance_by": ["gender"],
+        },
+    )
+    assert spec_response.status_code == 200
+    spec_id = spec_response.json()["id"]
+    override = client.post(
+        f"/api/dataset-specs/{spec_id}/overrides",
+        json={"variant_id": manual_id, "action": "include", "reason": "anchor outside filter"},
+    )
+    assert override.status_code == 200
+
+    preview_response = client.post(f"/api/dataset-specs/{spec_id}/preview")
+    build_response = client.post(f"/api/dataset-specs/{spec_id}/build")
+
+    assert preview_response.status_code == 200
+    assert build_response.status_code == 200
+    assert preview_response.json()["candidate_count"] == 2
+    assert preview_response.json()["item_count"] == 2
+    assert preview_response.json()["counts_by_sample_type"] == {"wake_positive": 2}
+    assert build_response.json()["item_count"] == 2
+
+
 def test_dataset_versions_and_items_can_be_listed_and_fetched(client, wav_factory):
     import_asset(client, wav_factory, "version_pos.wav", "你好小智", "wake_positive")
     import_asset(client, wav_factory, "version_neg.wav", "你好小志", "similar_negative")
@@ -1221,13 +1552,14 @@ uv run python -m pytest tests/test_dataset_browse_api.py -v
 
 Expected: FAIL with 405/404 for GET spec, preview, versions, or items endpoints.
 
-- [ ] **Step 3: Add preview service using the same selection rules as build**
+- [ ] **Step 3: Extract shared dataset selection service, then add preview service**
 
-Create `/Users/e4/Documents/kws_testset/kws_testset/services/dataset_preview_service.py`:
+Create `/Users/e4/Documents/kws_testset/kws_testset/services/dataset_selection_service.py`:
 
 ```python
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from sqlmodel import Session, select
@@ -1235,7 +1567,18 @@ from sqlmodel import Session, select
 from kws_testset.models.audio import AudioVariant
 from kws_testset.models.dataset import DatasetSpec, ManualOverride
 from kws_testset.services.coverage_service import build_coverage_summary
-from kws_testset.services.sampling_service import ManualOverrideInput, SampleCandidate, sample_candidates
+from kws_testset.services.sampling_service import ManualOverrideInput, SampleCandidate, SamplingResult, SelectedSample, sample_candidates
+
+
+@dataclass(frozen=True)
+class SpecSelection:
+    variants: list[AudioVariant]
+    selected_variants: list[AudioVariant]
+    selected_by_id: dict[str, SelectedSample]
+    overrides: list[ManualOverride]
+    snapshots: list[dict[str, Any]]
+    result: SamplingResult
+    coverage_summary: dict[str, Any]
 
 
 def variant_to_candidate(variant: AudioVariant) -> SampleCandidate:
@@ -1294,15 +1637,35 @@ def matches_filters(variant: AudioVariant, filters: dict[str, Any]) -> bool:
     return True
 
 
-def preview_spec_selection(spec: DatasetSpec, session: Session) -> dict[str, Any]:
+def select_spec_samples(spec: DatasetSpec, session: Session) -> SpecSelection:
     ready_variants = session.exec(select(AudioVariant).where(AudioVariant.quality_status == "ready").order_by(AudioVariant.id)).all()
     overrides = session.exec(select(ManualOverride).where(ManualOverride.dataset_spec_id == spec.id).order_by(ManualOverride.id)).all()
-    variants = [item for item in ready_variants if matches_filters(item, spec.filters)]
+    include_ids = {item.variant_id for item in overrides if item.action == "include"}
+    include_variants_by_id: dict[str, AudioVariant] = {}
+    if include_ids:
+        include_variants = session.exec(select(AudioVariant).where(AudioVariant.id.in_(include_ids)).order_by(AudioVariant.id)).all()
+        include_variants_by_id = {item.id: item for item in include_variants}
+        missing_include_ids = sorted(include_ids - set(include_variants_by_id))
+        if missing_include_ids:
+            raise ValueError(f"manual include variant not found: {', '.join(missing_include_ids)}")
+        not_ready_include_ids = sorted(item.id for item in include_variants if item.quality_status != "ready")
+        if not_ready_include_ids:
+            raise ValueError(f"manual include variant must be ready: {', '.join(not_ready_include_ids)}")
+        wrong_type_include_ids = sorted(item.id for item in include_variants if item.sample_type not in spec.quotas)
+        if wrong_type_include_ids:
+            raise ValueError(f"manual include sample_type must be in quotas: {', '.join(wrong_type_include_ids)}")
+
+    auto_variants = [item for item in ready_variants if matches_filters(item, spec.filters)]
     if spec.min_duration_sec is not None:
-        variants = [item for item in variants if item.duration_sec >= spec.min_duration_sec]
+        auto_variants = [item for item in auto_variants if item.duration_sec >= spec.min_duration_sec]
     if spec.max_duration_sec is not None:
-        variants = [item for item in variants if item.duration_sec <= spec.max_duration_sec]
-    variants = [item for item in variants if item.sample_type in spec.quotas]
+        auto_variants = [item for item in auto_variants if item.duration_sec <= spec.max_duration_sec]
+    auto_variants = [item for item in auto_variants if item.sample_type in spec.quotas]
+
+    variants_by_id = {item.id: item for item in auto_variants}
+    for item_id in sorted(include_variants_by_id):
+        variants_by_id[item_id] = include_variants_by_id[item_id]
+    variants = list(variants_by_id.values())
     candidates = [variant_to_candidate(item) for item in variants]
     result = sample_candidates(
         candidates=candidates,
@@ -1311,17 +1674,81 @@ def preview_spec_selection(spec: DatasetSpec, session: Session) -> dict[str, Any
         seed=spec.sampling_seed,
         overrides=[ManualOverrideInput(item.variant_id, item.action, item.reason) for item in overrides],
     )
-    selected_ids = {item.variant_id for item in result.items}
-    snapshots = [metadata_snapshot(item) for item in variants if item.id in selected_ids]
+    selected_by_id = {item.variant_id: item for item in result.items}
+    selected_variants = [item for item in variants if item.id in selected_by_id]
+    selected_variants.sort(key=lambda item: selected_by_id[item.id].selection_rank)
+    snapshots = [metadata_snapshot(item) for item in selected_variants]
     coverage = build_coverage_summary(snapshots, spec.balance_by + ["sample_type"], result.shortfalls)
+    return SpecSelection(
+        variants=variants,
+        selected_variants=selected_variants,
+        selected_by_id=selected_by_id,
+        overrides=overrides,
+        snapshots=snapshots,
+        result=result,
+        coverage_summary=coverage,
+    )
+```
+
+Create `/Users/e4/Documents/kws_testset/kws_testset/services/dataset_preview_service.py`:
+
+```python
+from __future__ import annotations
+
+from typing import Any
+
+from sqlmodel import Session
+
+from kws_testset.models.dataset import DatasetSpec
+from kws_testset.services.dataset_selection_service import select_spec_samples
+
+
+def preview_spec_selection(spec: DatasetSpec, session: Session) -> dict[str, Any]:
+    selection = select_spec_samples(spec, session)
     return {
         "spec_id": spec.id,
-        "candidate_count": len(variants),
-        "item_count": len(result.items),
-        "counts_by_sample_type": result.counts_by_sample_type,
-        "shortfalls": result.shortfalls,
-        "coverage_summary": coverage,
+        "candidate_count": len(selection.variants),
+        "item_count": len(selection.result.items),
+        "counts_by_sample_type": selection.result.counts_by_sample_type,
+        "shortfalls": selection.result.shortfalls,
+        "coverage_summary": selection.coverage_summary,
     }
+```
+
+Modify `/Users/e4/Documents/kws_testset/kws_testset/api/datasets.py` so build uses the same service:
+
+- Replace the local imports of `ManualOverrideInput`, `SampleCandidate`, and `sample_candidates` with:
+
+```python
+from kws_testset.services.dataset_selection_service import select_spec_samples
+```
+
+- Delete the local `_variant_to_candidate`, `_matches_filters`, and `_metadata_snapshot` helpers.
+
+- In `build_dataset_version`, replace the block that builds `all_ready_variants`, `include_variants_by_id`, `auto_variants`, `candidates`, `result`, `selected_by_id`, and `selected_variants` with:
+
+```python
+        try:
+            selection = select_spec_samples(spec, session)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        overrides = selection.overrides
+        selected_by_id = selection.selected_by_id
+        selected_variants = selection.selected_variants
+```
+
+- Replace the later snapshot and coverage lines with:
+
+```python
+        snapshots_by_variant_id = {item["variant_id"]: item for item in selection.snapshots}
+        snapshots = selection.snapshots
+        coverage = selection.coverage_summary
+```
+
+- In `rules_snapshot`, keep the existing `overrides` list and set `shortfalls` from the shared result:
+
+```python
+                "shortfalls": selection.result.shortfalls,
 ```
 
 - [ ] **Step 4: Add dataset browse and preview routes**
@@ -1469,7 +1896,7 @@ Expected: all tests pass.
 - [ ] **Step 6: Commit Task 4**
 
 ```bash
-git add kws_testset/services/dataset_preview_service.py kws_testset/api/datasets.py tests/test_dataset_browse_api.py
+git add kws_testset/services/dataset_selection_service.py kws_testset/services/dataset_preview_service.py kws_testset/api/datasets.py tests/test_dataset_browse_api.py
 git commit -m "feat: add dataset browse and preview APIs"
 ```
 
@@ -1588,9 +2015,11 @@ export type ImportBatch = {
   file_count: number;
   imported_count: number;
   duplicate_count: number;
+  failed_count?: number;
   status: string;
   created_at: string;
   completed_at: string | null;
+  files?: Array<{ path: string; status: string; errors: string[] }>;
 };
 
 export type DatasetSpec = {
@@ -1727,13 +2156,13 @@ export const api = {
     requestJson<ImportBatch>('/api/imports', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, files })
+      body: JSON.stringify({ name, partial: true, files })
     }),
   listImports: () => requestJson<{ items: ImportBatch[] }>('/api/imports'),
   listAssets: (params: Record<string, string> = {}) => {
     const search = new URLSearchParams(params);
     const query = search.toString();
-    return requestJson<{ items: Asset[]; count: number; limit: number; offset: number }>(`/api/assets${query ? `?${query}` : ''}`);
+    return requestJson<{ items: Asset[]; count: number; total: number; limit: number; offset: number }>(`/api/assets${query ? `?${query}` : ''}`);
   },
   patchAsset: (id: string, patch: Partial<Asset>) =>
     requestJson<{ asset: Asset }>('/api/assets/' + encodeURIComponent(id), {
@@ -2090,7 +2519,15 @@ export function ImportPage() {
     setError(null);
     const files = rows.filter((row) => row.status === 'can_import').map(({ original_filename, duration_sec, sample_rate, channels, bit_depth, sha256, status, error: rowError, ...file }) => file);
     const response = await api.commitImport(batchName, files);
-    setMessage(`导入完成：${response.imported_count} 条，重复 ${response.duplicate_count} 条`);
+    if (response.files) {
+      const byPath = new Map(response.files.map((item) => [item.path, item]));
+      setRows((current) => current.map((row) => {
+        const result = byPath.get(row.path);
+        if (!result || result.status !== 'error') return row;
+        return { ...row, status: 'error', error: result.errors.join('; ') };
+      }));
+    }
+    setMessage(`导入完成：${response.imported_count} 条，重复 ${response.duplicate_count} 条，失败 ${response.failed_count ?? 0} 条`);
   }
 
   const sampleTypes = taxonomy.sample_type ?? ['wake_positive', 'similar_negative', 'partial_wake', 'ordinary_negative'];
@@ -2535,7 +2972,7 @@ export function SettingsPage() {
 
 Append to `/Users/e4/Documents/kws_testset/README.md`:
 
-```markdown
+````markdown
 ## Frontend Development
 
 The platform UI is a React + Vite + TypeScript app under `frontend/`.
@@ -2572,7 +3009,7 @@ http://127.0.0.1:8000
 ```
 
 These commands are the same on macOS, Windows, and Linux. Avoid relying on bash-only wrapper scripts for normal development.
-```
+````
 
 - [ ] **Step 4: Run full frontend checks**
 
@@ -2684,7 +3121,7 @@ Report the exact verification commands and their passing outputs. Include the cu
 
 Spec coverage:
 
-- Browser multi-WAV upload: Task 2 backend, Task 6 UI.
+- Browser multi-WAV upload and partial valid-row commit: Task 2 backend, Task 6 UI.
 - Batch metadata editing during import: Task 6.
 - Asset filtering, playback, single edit, bulk edit: Task 3 backend, Task 6 UI.
 - Dataset spec creation, preview, build: Task 4 backend, Task 7 UI.
