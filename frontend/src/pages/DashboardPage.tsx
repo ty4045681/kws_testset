@@ -3,15 +3,29 @@ import { api } from '../api/client';
 import { ErrorSummary } from '../components/ErrorSummary';
 import type { Asset, DatasetVersion } from '../types/api';
 
+async function loadAllAssets(): Promise<Asset[]> {
+  const limit = 500;
+  let offset = 0;
+  const assets: Asset[] = [];
+  while (true) {
+    const response = await api.listAssets({ limit, offset });
+    assets.push(...response.items);
+    offset += response.count;
+    if (assets.length >= response.total || response.count === 0) {
+      return assets;
+    }
+  }
+}
+
 export function DashboardPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [versions, setVersions] = useState<DatasetVersion[]>([]);
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
-    Promise.all([api.listAssets(), api.listDatasetVersions()])
-      .then(([assetResponse, versionResponse]) => {
-        setAssets(assetResponse.items);
+    Promise.all([loadAllAssets(), api.listDatasetVersions()])
+      .then(([assetItems, versionResponse]) => {
+        setAssets(assetItems);
         setVersions(versionResponse.items);
       })
       .catch(setError);

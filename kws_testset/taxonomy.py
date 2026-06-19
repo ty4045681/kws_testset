@@ -8,6 +8,7 @@ VOLUMES = ["low", "normal", "high", "unknown"]
 PITCHES = ["low", "normal", "high", "unknown"]
 SPEEDS = ["slow", "normal", "fast", "unknown"]
 NOISE_SCENES = ["clean", "home", "office", "car", "street", "music", "babble", "other", "unknown"]
+SNR_BUCKETS = ["clean", "gt20", "10_20", "0_10", "lt0", "unknown"]
 IMPAIRMENT_TYPES = ["none", "device_denoise", "network_denoise", "codec", "far_field", "clipping", "other", "unknown"]
 QUALITY_STATUSES = ["draft", "ready", "deprecated"]
 VARIANT_KINDS = ["original", "speed_change", "pitch_shift", "volume_gain", "noise_mix", "device_denoise", "network_denoise", "codec", "far_field", "clipping", "combined", "other"]
@@ -23,6 +24,7 @@ def as_dict() -> dict[str, list[str]]:
         "pitch": PITCHES,
         "speed": SPEEDS,
         "noise_scene": NOISE_SCENES,
+        "snr_bucket": SNR_BUCKETS,
         "impairment_type": IMPAIRMENT_TYPES,
         "quality_status": QUALITY_STATUSES,
         "variant_kind": VARIANT_KINDS,

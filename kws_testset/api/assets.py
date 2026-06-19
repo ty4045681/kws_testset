@@ -18,15 +18,18 @@ FILTERABLE_FIELDS = {
     "sample_type",
     "quality_status",
     "voice_source",
+    "speaker_id",
     "gender",
     "age_group",
     "volume",
     "pitch",
     "speed",
     "noise_scene",
+    "snr_bucket",
     "impairment_type",
     "variant_kind",
 }
+CONTROL_QUERY_PARAMS = {"limit", "offset"}
 
 
 class AssetPatchRequest(BaseModel):
@@ -52,7 +55,7 @@ class BulkUpdateRequest(BaseModel):
 
 
 def _extract_patch(payload: AssetPatchRequest) -> dict[str, Any]:
-    return {key: value for key, value in payload.model_dump().items() if value is not None}
+    return payload.model_dump(exclude_unset=True)
 
 
 @router.get("")
@@ -63,6 +66,10 @@ def list_assets(request: Request, limit: int = 200, offset: int = 0) -> dict[str
     count_query = select(func.count()).select_from(AudioVariant)
     query_params = dict(request.query_params)
     for field, value in query_params.items():
+        if field in CONTROL_QUERY_PARAMS:
+            continue
+        if field not in FILTERABLE_FIELDS:
+            raise HTTPException(status_code=400, detail=f"unknown asset filter: {field}")
         if field in FILTERABLE_FIELDS:
             condition = getattr(AudioVariant, field) == value
             query = query.where(condition)
@@ -80,8 +87,9 @@ def bulk_update_assets(payload: BulkUpdateRequest, request: Request) -> dict[str
     results: dict[str, Any] = {}
     updated = 0
     failed = 0
+    asset_ids = list(dict.fromkeys(payload.asset_ids))
     with Session(request.app.state.engine) as session:
-        for asset_id in payload.asset_ids:
+        for asset_id in asset_ids:
             savepoint = session.begin_nested()
             try:
                 item = session.get(AudioVariant, asset_id)
@@ -100,9 +108,10 @@ def bulk_update_assets(payload: BulkUpdateRequest, request: Request) -> dict[str
                 savepoint.commit()
                 updated += 1
                 results[asset_id] = {"ok": True, "errors": [], "warnings": validation.warnings}
-            except Exception:
+            except Exception as exc:
                 savepoint.rollback()
-                raise
+                failed += 1
+                results[asset_id] = {"ok": False, "errors": [f"unexpected error: {exc}"], "warnings": []}
         session.commit()
     return {"updated": updated, "failed": failed, "results": results}
 

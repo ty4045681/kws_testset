@@ -1,5 +1,7 @@
 import type {
   Asset,
+  AssetListResponse,
+  BulkUpdateResponse,
   DatasetItem,
   DatasetPreview,
   DatasetSpec,
@@ -48,10 +50,10 @@ export const api = {
       body: JSON.stringify({ name, partial: true, files })
     }),
   listImports: () => requestJson<{ items: ImportBatch[] }>('/api/imports'),
-  listAssets: (params: Record<string, string> = {}) => {
-    const search = new URLSearchParams(params);
+  listAssets: (params: Record<string, string | number> = {}) => {
+    const search = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]));
     const query = search.toString();
-    return requestJson<{ items: Asset[]; count: number; total: number; limit: number; offset: number }>(`/api/assets${query ? `?${query}` : ''}`);
+    return requestJson<AssetListResponse>(`/api/assets${query ? `?${query}` : ''}`);
   },
   patchAsset: (id: string, patch: Partial<Asset>) =>
     requestJson<{ asset: Asset }>('/api/assets/' + encodeURIComponent(id), {
@@ -60,7 +62,7 @@ export const api = {
       body: JSON.stringify(patch)
     }),
   bulkUpdateAssets: (assetIds: string[], patch: Record<string, unknown>) =>
-    requestJson<{ updated: number; failed: number; results: Record<string, { ok: boolean; errors: string[]; warnings: string[] }> }>('/api/assets/bulk-update', {
+    requestJson<BulkUpdateResponse>('/api/assets/bulk-update', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ asset_ids: assetIds, patch })

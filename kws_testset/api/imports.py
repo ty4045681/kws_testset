@@ -40,6 +40,7 @@ class CommitImportRequest(BaseModel):
 
 
 def _batch_payload(batch: ImportBatch) -> dict[str, Any]:
+    failed_count = max(batch.file_count - batch.imported_count - batch.duplicate_count, 0)
     return {
         "id": batch.id,
         "name": batch.name,
@@ -47,6 +48,7 @@ def _batch_payload(batch: ImportBatch) -> dict[str, Any]:
         "file_count": batch.file_count,
         "imported_count": batch.imported_count,
         "duplicate_count": batch.duplicate_count,
+        "failed_count": failed_count,
         "status": batch.status,
         "created_at": batch.created_at.isoformat(),
         "completed_at": batch.completed_at.isoformat() if batch.completed_at else None,

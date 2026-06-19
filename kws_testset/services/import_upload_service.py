@@ -36,15 +36,29 @@ def safe_upload_filename(filename: str) -> str:
     return cleaned
 
 
+def _unique_upload_filename(upload_dir: Path, filename: str, used_filenames: set[str]) -> str:
+    path = Path(filename)
+    stem = path.stem or "upload"
+    suffix = path.suffix
+    candidate = filename
+    counter = 2
+    while candidate in used_filenames or (upload_dir / candidate).exists():
+        candidate = f"{stem}_{counter}{suffix}"
+        counter += 1
+    used_filenames.add(candidate)
+    return candidate
+
+
 def save_uploads(files: list[UploadFile], config: AppConfig, session: Session) -> tuple[str, list[UploadedAudioRow]]:
     upload_id = new_id("upl")
     upload_dir = config.app.data_dir / "uploads" / upload_id
     upload_dir.mkdir(parents=True, exist_ok=True)
     rows: list[UploadedAudioRow] = []
+    used_filenames: set[str] = set()
 
     for index, upload in enumerate(files):
         original_filename = upload.filename or f"upload_{index}.wav"
-        filename = safe_upload_filename(original_filename)
+        filename = _unique_upload_filename(upload_dir, safe_upload_filename(original_filename), used_filenames)
         destination = upload_dir / filename
 
         if not filename.lower().endswith(".wav"):
@@ -89,7 +103,7 @@ def save_uploads(files: list[UploadFile], config: AppConfig, session: Session) -
         rows.append(
             UploadedAudioRow(
                 path=probe.path,
-                original_filename=filename,
+                original_filename=original_filename,
                 duration_sec=probe.duration_sec,
                 sample_rate=probe.sample_rate,
                 channels=probe.channels,

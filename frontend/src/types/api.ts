@@ -76,11 +76,25 @@ export type ImportBatch = {
   file_count: number;
   imported_count: number;
   duplicate_count: number;
-  failed_count?: number;
+  failed_count: number;
   status: string;
   created_at: string;
   completed_at: string | null;
   files?: Array<{ path: string; status: string; errors: string[] }>;
+};
+
+export type AssetListResponse = {
+  items: Asset[];
+  count: number;
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type BulkUpdateResponse = {
+  updated: number;
+  failed: number;
+  results: Record<string, { ok: boolean; errors: string[]; warnings: string[] }>;
 };
 
 export type DatasetSpec = {

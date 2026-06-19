@@ -1,6 +1,7 @@
 from sqlmodel import Session
 
 from kws_testset.models.audio import AudioVariant
+from kws_testset.services.validation_service import ValidationResult
 
 
 def _import_ready_asset(client, wav_factory, name="asset_edit.wav") -> str:
@@ -103,6 +104,84 @@ def test_bulk_update_preserves_success_when_later_existing_asset_fails(client, w
     with Session(client.app.state.engine) as session:
         assert session.get(AudioVariant, first).sample_type == "ordinary_negative"
         assert session.get(AudioVariant, second).sample_type == "wake_positive"
+
+
+def test_bulk_update_reports_unexpected_per_asset_errors_without_losing_prior_success(client, wav_factory, monkeypatch):
+    first = _import_ready_asset(client, wav_factory, "bulk_unexpected_good.wav")
+    second = _import_ready_asset(client, wav_factory, "bulk_unexpected_bad.wav")
+
+    def fail_second(item, patch, config):
+        if item.id == second:
+            raise RuntimeError("synthetic patch failure")
+        item.noise_scene = patch["noise_scene"]
+        return ValidationResult(True, [], [])
+
+    monkeypatch.setattr("kws_testset.api.assets.apply_asset_patch", fail_second)
+
+    response = client.post(
+        "/api/assets/bulk-update",
+        json={"asset_ids": [first, second], "patch": {"noise_scene": "office"}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated"] == 1
+    assert payload["failed"] == 1
+    assert payload["results"][first]["ok"] is True
+    assert payload["results"][second]["ok"] is False
+    assert "unexpected error" in payload["results"][second]["errors"][0]
+    with Session(client.app.state.engine) as session:
+        assert session.get(AudioVariant, first).noise_scene == "office"
+        assert session.get(AudioVariant, second).noise_scene == "clean"
+
+
+def test_bulk_update_deduplicates_asset_ids(client, wav_factory):
+    asset_id = _import_ready_asset(client, wav_factory, "bulk_duplicate_id.wav")
+
+    response = client.post(
+        "/api/assets/bulk-update",
+        json={"asset_ids": [asset_id, asset_id], "patch": {"noise_scene": "office"}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated"] == 1
+    assert payload["failed"] == 0
+    assert list(payload["results"]) == [asset_id]
+
+
+def test_patch_asset_can_clear_nullable_fields(client, wav_factory):
+    asset_id = _import_ready_asset(client, wav_factory, "nullable_clear.wav")
+    set_response = client.patch(f"/api/assets/{asset_id}", json={"speaker_id": "spk_1", "notes": "needs review"})
+    assert set_response.status_code == 200
+
+    clear_response = client.patch(f"/api/assets/{asset_id}", json={"speaker_id": None, "notes": None})
+
+    assert clear_response.status_code == 200
+    payload = clear_response.json()
+    assert payload["asset"]["speaker_id"] is None
+    assert payload["asset"]["notes"] is None
+
+
+def test_patch_asset_validates_snr_bucket_values(client, wav_factory):
+    asset_id = _import_ready_asset(client, wav_factory, "snr_bucket.wav")
+
+    invalid = client.patch(f"/api/assets/{asset_id}", json={"snr_bucket": "garbage"})
+    valid = client.patch(f"/api/assets/{asset_id}", json={"snr_bucket": "gt20"})
+
+    assert invalid.status_code == 400
+    assert "snr_bucket has invalid value: garbage" in invalid.json()["detail"]["errors"]
+    assert valid.status_code == 200
+    assert valid.json()["asset"]["snr_bucket"] == "gt20"
+
+
+def test_assets_reject_unknown_filter_keys(client, wav_factory):
+    _import_ready_asset(client, wav_factory, "unknown_filter.wav")
+
+    response = client.get("/api/assets?sampletype=wake_positive")
+
+    assert response.status_code == 400
+    assert "unknown asset filter: sampletype" == response.json()["detail"]
 
 
 def test_asset_audio_endpoint_streams_wav(client, wav_factory):

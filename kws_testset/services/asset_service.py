@@ -26,6 +26,8 @@ EDITABLE_FIELDS = {
     "notes",
 }
 
+NULLABLE_FIELDS = {"speaker_id", "snr_bucket", "notes"}
+
 
 def asset_payload(item: AudioVariant, config: AppConfig) -> dict[str, Any]:
     validation = asset_validation_payload(item, config)
@@ -84,6 +86,11 @@ def apply_asset_patch(item: AudioVariant, patch: dict[str, Any], config: AppConf
     for key, value in patch.items():
         if key not in EDITABLE_FIELDS:
             return ValidationResult(False, [f"field is not editable: {key}"], [])
+        if value is None:
+            if key not in NULLABLE_FIELDS:
+                return ValidationResult(False, [f"{key} cannot be null"], [])
+            setattr(item, key, None)
+            continue
         if key in taxonomy and value not in taxonomy[key]:
             return ValidationResult(False, [f"{key} has invalid value: {value}"], [])
         setattr(item, key, value)

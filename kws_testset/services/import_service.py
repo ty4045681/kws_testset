@@ -12,7 +12,7 @@ from sqlmodel import Session, select
 from kws_testset.config import AppConfig
 from kws_testset.models.audio import AudioSource, AudioVariant
 from kws_testset.models.import_batch import ImportBatch
-from kws_testset.services.audio_probe import probe_wav
+from kws_testset.services.audio_probe import AudioProbe, probe_wav
 from kws_testset.services.text_normalize import normalize_text
 from kws_testset.services.validation_service import validate_ready_metadata
 from kws_testset.utils.ids import dated_id, new_id
@@ -90,6 +90,72 @@ def scan_wav_paths(paths: list[str], session: Session) -> list[ScannedAudioFile]
     return results
 
 
+def _stored_source_path(source_root: Path, probe: AudioProbe) -> Path:
+    source_id = dated_id("src", probe.sha256)
+    return source_root / f"{source_id}.wav"
+
+
+def _add_original_source_and_variant(
+    item: dict[str, Any],
+    probe: AudioProbe,
+    batch_id: str,
+    source_root: Path,
+    session: Session,
+) -> Path:
+    source_id = dated_id("src", probe.sha256)
+    variant_id = dated_id("var", probe.sha256)
+    stored_path = _stored_source_path(source_root, probe)
+    shutil.copy2(probe.path, stored_path)
+
+    source = AudioSource(
+        id=source_id,
+        original_filename=probe.path.name,
+        stored_path=str(stored_path.resolve()),
+        sha256=probe.sha256,
+        duration_sec=probe.duration_sec,
+        sample_rate=probe.sample_rate,
+        channels=probe.channels,
+        bit_depth=probe.bit_depth,
+        import_batch_id=batch_id,
+    )
+    variant = AudioVariant(
+        id=variant_id,
+        source_id=source_id,
+        variant_kind="original",
+        stored_path=str(stored_path.resolve()),
+        sha256=probe.sha256,
+        duration_sec=probe.duration_sec,
+        sample_rate=probe.sample_rate,
+        channels=probe.channels,
+        text=item["text"],
+        normalized_text=normalize_text(item["text"]),
+        sample_type=item["sample_type"],
+        quality_status=item.get("quality_status", "draft"),
+        voice_source=item.get("voice_source", "unknown"),
+        gender=item.get("gender", "unknown"),
+        age_group=item.get("age_group", "unknown"),
+        volume=item.get("volume", "unknown"),
+        pitch=item.get("pitch", "unknown"),
+        speed=item.get("speed", "unknown"),
+        noise_scene=item.get("noise_scene", "unknown"),
+        impairment_type=item.get("impairment_type", "none"),
+        notes=item.get("notes"),
+    )
+    session.add(source)
+    session.add(variant)
+    return stored_path
+
+
+def _partial_batch_status(imported_count: int, duplicate_count: int, failed_count: int) -> str:
+    if failed_count:
+        return "partial" if imported_count or duplicate_count else "failed"
+    if imported_count:
+        return "imported"
+    if duplicate_count:
+        return "duplicate"
+    return "empty"
+
+
 def commit_import_batch(name: str, files: list[dict[str, Any]], config: AppConfig, session: Session) -> ImportBatch:
     batch_id = new_id("imp")
     batch = ImportBatch(id=batch_id, name=name, file_count=len(files), status="imported")
@@ -116,48 +182,8 @@ def commit_import_batch(name: str, files: list[dict[str, Any]], config: AppConfi
             if not ready_check.ok:
                 raise ValueError("; ".join(ready_check.errors))
 
-            source_id = dated_id("src", probe.sha256)
-            variant_id = dated_id("var", probe.sha256)
-            stored_path = source_root / f"{source_id}.wav"
-            shutil.copy2(probe.path, stored_path)
+            stored_path = _add_original_source_and_variant(item, probe, batch_id, source_root, session)
             copied_paths.append(stored_path)
-
-            source = AudioSource(
-                id=source_id,
-                original_filename=probe.path.name,
-                stored_path=str(stored_path.resolve()),
-                sha256=probe.sha256,
-                duration_sec=probe.duration_sec,
-                sample_rate=probe.sample_rate,
-                channels=probe.channels,
-                bit_depth=probe.bit_depth,
-                import_batch_id=batch_id,
-            )
-            variant = AudioVariant(
-                id=variant_id,
-                source_id=source_id,
-                variant_kind="original",
-                stored_path=str(stored_path.resolve()),
-                sha256=probe.sha256,
-                duration_sec=probe.duration_sec,
-                sample_rate=probe.sample_rate,
-                channels=probe.channels,
-                text=item["text"],
-                normalized_text=normalize_text(item["text"]),
-                sample_type=item["sample_type"],
-                quality_status=item.get("quality_status", "draft"),
-                voice_source=item.get("voice_source", "unknown"),
-                gender=item.get("gender", "unknown"),
-                age_group=item.get("age_group", "unknown"),
-                volume=item.get("volume", "unknown"),
-                pitch=item.get("pitch", "unknown"),
-                speed=item.get("speed", "unknown"),
-                noise_scene=item.get("noise_scene", "unknown"),
-                impairment_type=item.get("impairment_type", "none"),
-                notes=item.get("notes"),
-            )
-            session.add(source)
-            session.add(variant)
             imported_count += 1
 
         batch.imported_count = imported_count
@@ -190,72 +216,48 @@ def commit_import_batch_partial(name: str, files: list[dict[str, Any]], config: 
     try:
         for item in files:
             path_text = str(item["path"])
+            stored_path: Path | None = None
+            savepoint = session.begin_nested()
             try:
-                probe = probe_wav(item["path"])
-            except (OSError, EOFError, ValueError, wave.Error):
+                try:
+                    probe = probe_wav(item["path"])
+                except (OSError, EOFError, ValueError, wave.Error):
+                    savepoint.rollback()
+                    failed_count += 1
+                    results.append(ImportFileCommitResult(path_text, "error", [f"invalid WAV file: {path_text}"]))
+                    continue
+
+                existing = session.exec(select(AudioSource).where(AudioSource.sha256 == probe.sha256)).first()
+                if existing:
+                    savepoint.rollback()
+                    duplicate_count += 1
+                    results.append(ImportFileCommitResult(path_text, "duplicate", []))
+                    continue
+
+                ready_check = validate_ready_metadata(item, probe.duration_sec, config.app.target_keyword)
+                if not ready_check.ok:
+                    savepoint.rollback()
+                    failed_count += 1
+                    results.append(ImportFileCommitResult(path_text, "error", ready_check.errors))
+                    continue
+
+                stored_path = _stored_source_path(source_root, probe)
+                _add_original_source_and_variant(item, probe, batch_id, source_root, session)
+                session.flush()
+                savepoint.commit()
+                copied_paths.append(stored_path)
+                imported_count += 1
+                results.append(ImportFileCommitResult(path_text, "imported", []))
+            except Exception as exc:
+                savepoint.rollback()
+                if stored_path is not None:
+                    stored_path.unlink(missing_ok=True)
                 failed_count += 1
-                results.append(ImportFileCommitResult(path_text, "error", [f"invalid WAV file: {path_text}"]))
-                continue
-            existing = session.exec(select(AudioSource).where(AudioSource.sha256 == probe.sha256)).first()
-            if existing:
-                duplicate_count += 1
-                results.append(ImportFileCommitResult(path_text, "duplicate", []))
-                continue
-
-            ready_check = validate_ready_metadata(item, probe.duration_sec, config.app.target_keyword)
-            if not ready_check.ok:
-                failed_count += 1
-                results.append(ImportFileCommitResult(path_text, "error", ready_check.errors))
-                continue
-
-            source_id = dated_id("src", probe.sha256)
-            variant_id = dated_id("var", probe.sha256)
-            stored_path = source_root / f"{source_id}.wav"
-            shutil.copy2(probe.path, stored_path)
-            copied_paths.append(stored_path)
-
-            source = AudioSource(
-                id=source_id,
-                original_filename=probe.path.name,
-                stored_path=str(stored_path.resolve()),
-                sha256=probe.sha256,
-                duration_sec=probe.duration_sec,
-                sample_rate=probe.sample_rate,
-                channels=probe.channels,
-                bit_depth=probe.bit_depth,
-                import_batch_id=batch_id,
-            )
-            variant = AudioVariant(
-                id=variant_id,
-                source_id=source_id,
-                variant_kind="original",
-                stored_path=str(stored_path.resolve()),
-                sha256=probe.sha256,
-                duration_sec=probe.duration_sec,
-                sample_rate=probe.sample_rate,
-                channels=probe.channels,
-                text=item["text"],
-                normalized_text=normalize_text(item["text"]),
-                sample_type=item["sample_type"],
-                quality_status=item.get("quality_status", "draft"),
-                voice_source=item.get("voice_source", "unknown"),
-                gender=item.get("gender", "unknown"),
-                age_group=item.get("age_group", "unknown"),
-                volume=item.get("volume", "unknown"),
-                pitch=item.get("pitch", "unknown"),
-                speed=item.get("speed", "unknown"),
-                noise_scene=item.get("noise_scene", "unknown"),
-                impairment_type=item.get("impairment_type", "none"),
-                notes=item.get("notes"),
-            )
-            session.add(source)
-            session.add(variant)
-            imported_count += 1
-            results.append(ImportFileCommitResult(path_text, "imported", []))
+                results.append(ImportFileCommitResult(path_text, "error", [str(exc)]))
 
         batch.imported_count = imported_count
         batch.duplicate_count = duplicate_count
-        batch.status = "imported" if failed_count == 0 else "partial"
+        batch.status = _partial_batch_status(imported_count, duplicate_count, failed_count)
         batch.completed_at = datetime.now(timezone.utc)
         session.add(batch)
         session.commit()

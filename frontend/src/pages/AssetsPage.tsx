@@ -11,12 +11,14 @@ export function AssetsPage() {
   const [taxonomy, setTaxonomy] = useState<Taxonomy>({});
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pendingPatches, setPendingPatches] = useState<Record<string, Partial<Asset>>>({});
   const [error, setError] = useState<unknown>(null);
 
   async function loadAssets(nextFilter = filter) {
     const params: Record<string, string> = nextFilter ? { sample_type: nextFilter } : {};
     const response = await api.listAssets(params);
     setAssets(response.items);
+    setPendingPatches({});
   }
 
   useEffect(() => {
@@ -26,17 +28,34 @@ export function AssetsPage() {
 
   function updateLocal(id: string, patch: Partial<Asset>) {
     setAssets((current) => current.map((asset) => (asset.id === id ? { ...asset, ...patch } : asset)));
+    setPendingPatches((current) => ({ ...current, [id]: { ...(current[id] ?? {}), ...patch } }));
   }
 
   async function save(asset: Asset) {
-    const response = await api.patchAsset(asset.id, asset);
+    const patch = pendingPatches[asset.id];
+    if (!patch || Object.keys(patch).length === 0) return;
+    const response = await api.patchAsset(asset.id, patch);
     setAssets((current) => current.map((item) => (item.id === asset.id ? response.asset : item)));
+    setPendingPatches((current) => {
+      const next = { ...current };
+      delete next[asset.id];
+      return next;
+    });
   }
 
   async function bulkApply(patch: Record<string, string>) {
-    await api.bulkUpdateAssets(Array.from(selected), patch);
-    setSelected(new Set());
+    const response = await api.bulkUpdateAssets(Array.from(selected), patch);
     await loadAssets();
+    const failedIds = Object.entries(response.results)
+      .filter(([, result]) => !result.ok)
+      .map(([id]) => id);
+    if (failedIds.length > 0) {
+      setSelected(new Set(failedIds));
+      const lines = failedIds.flatMap((id) => response.results[id].errors.map((line) => `${id}: ${line}`));
+      throw new Error(`批量更新失败 ${response.failed} 条：${lines.join('; ')}`);
+    }
+    setSelected(new Set());
+    setError(null);
   }
 
   const sampleTypes = taxonomy.sample_type ?? ['wake_positive', 'similar_negative', 'partial_wake', 'ordinary_negative'];
