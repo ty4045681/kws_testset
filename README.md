@@ -83,3 +83,40 @@ eval_project:
 ```
 
 第一版导出会生成 `eval_config_snippet.yaml`。将其中内容复制到评测项目的 experiment config 即可运行离线评测。
+
+## Frontend Development
+
+The platform UI is a React + Vite + TypeScript app under `frontend/`.
+
+Install frontend dependencies:
+
+```bash
+cd frontend
+npm install
+```
+
+Run backend and frontend in development mode:
+
+```bash
+uv run python -m kws_testset serve
+cd frontend
+npm run dev
+```
+
+Open the Vite URL printed by `npm run dev`. Vite proxies `/api` to `http://127.0.0.1:8000`.
+
+Build the frontend:
+
+```bash
+cd frontend
+npm run typecheck
+npm run build
+```
+
+After `frontend/dist` exists, FastAPI serves the built UI from:
+
+```text
+http://127.0.0.1:8000
+```
+
+These commands are the same on macOS, Windows, and Linux. Avoid relying on bash-only wrapper scripts for normal development.

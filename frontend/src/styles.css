@@ -1,6 +1,6 @@
 :root {
-  color: #e5e7eb;
-  background: #0f172a;
+  color: #f4f1ea;
+  background: #1d1f1e;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
@@ -18,14 +18,14 @@ textarea {
 .app-shell {
   min-height: 100vh;
   display: flex;
-  background: #0f172a;
+  background: #1d1f1e;
 }
 
 .sidebar {
   width: 240px;
   padding: 20px;
-  background: #111827;
-  border-right: 1px solid #1f2937;
+  background: #252522;
+  border-right: 1px solid #3f3d36;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -41,8 +41,8 @@ textarea {
   border: 0;
   border-radius: 8px;
   padding: 10px 12px;
-  color: #cbd5e1;
-  background: #1f2937;
+  color: #d7d2c4;
+  background: #33312b;
   text-align: left;
   cursor: pointer;
 }
@@ -50,7 +50,7 @@ textarea {
 .nav-item.active,
 .nav-item:hover {
   color: #ffffff;
-  background: #2563eb;
+  background: #0f766e;
 }
 
 .content {
@@ -70,15 +70,15 @@ h1 {
 
 .metric-card,
 .panel {
-  background: #111827;
-  border: 1px solid #1f2937;
+  background: #282925;
+  border: 1px solid #403f38;
   border-radius: 8px;
   padding: 16px;
 }
 
 .metric-card span {
   display: block;
-  color: #94a3b8;
+  color: #b8b09e;
   font-size: 13px;
 }
 
@@ -104,7 +104,7 @@ button.primary,
   border-radius: 8px;
   padding: 9px 12px;
   color: #fff;
-  background: #2563eb;
+  background: #0f766e;
   cursor: pointer;
 }
 
@@ -116,17 +116,17 @@ button:disabled {
 input,
 select,
 textarea {
-  border: 1px solid #334155;
+  border: 1px solid #555044;
   border-radius: 8px;
   padding: 8px 10px;
-  color: #e5e7eb;
-  background: #0f172a;
+  color: #f4f1ea;
+  background: #1f201d;
 }
 
 table {
   width: 100%;
   border-collapse: collapse;
-  background: #111827;
+  background: #282925;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -134,18 +134,18 @@ table {
 th,
 td {
   padding: 10px;
-  border-bottom: 1px solid #1f2937;
+  border-bottom: 1px solid #403f38;
   text-align: left;
   vertical-align: top;
 }
 
 th {
-  color: #cbd5e1;
-  background: #1f2937;
+  color: #e5dccb;
+  background: #33312b;
 }
 
 .muted {
-  color: #94a3b8;
+  color: #b8b09e;
 }
 
 .error-summary,
@@ -163,8 +163,8 @@ th {
   border-radius: 999px;
   padding: 3px 8px;
   font-size: 12px;
-  background: #334155;
-  color: #e5e7eb;
+  background: #494538;
+  color: #f4f1ea;
 }
 
 .status-ready,
@@ -185,8 +185,8 @@ th {
 }
 
 .status-duplicate {
-  background: #3730a3;
-  color: #ddd6fe;
+  background: #4f46e5;
+  color: #e0e7ff;
 }
 
 .audio-player {
@@ -203,8 +203,8 @@ th {
 .tag {
   border-radius: 999px;
   padding: 4px 8px;
-  background: #1f2937;
-  color: #cbd5e1;
+  background: #33312b;
+  color: #d7d2c4;
 }
 
 .form-grid {
@@ -218,5 +218,21 @@ th {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  color: #cbd5e1;
+  color: #d7d2c4;
+}
+
+pre,
+code {
+  color: #fff7ed;
+  background: #1f201d;
+  border-radius: 6px;
+}
+
+pre {
+  overflow-x: auto;
+  padding: 12px;
+}
+
+code {
+  padding: 2px 5px;
 }
