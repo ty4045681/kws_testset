@@ -7,10 +7,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-from kws_testset.models.audio import AudioVariant
 from kws_testset.models.dataset import DatasetItem, DatasetSpec, DatasetVersion, ManualOverride
-from kws_testset.services.coverage_service import build_coverage_summary
-from kws_testset.services.sampling_service import ManualOverrideInput, SampleCandidate, sample_candidates
+from kws_testset.services.dataset_preview_service import preview_spec_selection
+from kws_testset.services.dataset_selection_service import select_spec_samples
 from kws_testset.services.text_normalize import normalize_text
 from kws_testset.utils.ids import new_id
 from kws_testset.utils.paths import safe_child_dir
@@ -52,28 +51,6 @@ class OverrideRequest(BaseModel):
     reason: str
 
 
-def _variant_to_candidate(variant: AudioVariant) -> SampleCandidate:
-    return SampleCandidate(
-        id=variant.id,
-        sample_type=variant.sample_type,
-        duration_sec=variant.duration_sec,
-        metadata={
-            "sample_type": variant.sample_type,
-            "voice_source": variant.voice_source,
-            "speaker_id": variant.speaker_id or "unknown",
-            "gender": variant.gender,
-            "age_group": variant.age_group,
-            "volume": variant.volume,
-            "pitch": variant.pitch,
-            "speed": variant.speed,
-            "noise_scene": variant.noise_scene,
-            "impairment_type": variant.impairment_type,
-            "variant_kind": variant.variant_kind,
-            "snr_bucket": variant.snr_bucket or "unknown",
-        },
-    )
-
-
 def _validate_filter_config(filters: dict[str, Any]) -> None:
     for field, allowed in filters.items():
         if field not in FILTER_FIELDS:
@@ -88,37 +65,56 @@ def _validate_balance_by(balance_by: list[str]) -> None:
             raise HTTPException(status_code=400, detail=f"unknown balance_by field: {field}")
 
 
-def _matches_filters(variant: AudioVariant, filters: dict[str, Any]) -> bool:
-    for field, allowed in filters.items():
-        if field == "quality_status":
-            continue
-        value = getattr(variant, field)
-        if value is None:
-            value = "unknown"
-        if value not in allowed:
-            return False
-    return True
-
-
-def _metadata_snapshot(variant: AudioVariant) -> dict[str, Any]:
+def _spec_payload(spec: DatasetSpec) -> dict[str, Any]:
     return {
-        "variant_id": variant.id,
-        "source_id": variant.source_id,
-        "stored_path": variant.stored_path,
-        "text": variant.text,
-        "normalized_text": variant.normalized_text,
-        "sample_type": variant.sample_type,
-        "voice_source": variant.voice_source,
-        "speaker_id": variant.speaker_id,
-        "gender": variant.gender,
-        "age_group": variant.age_group,
-        "volume": variant.volume,
-        "pitch": variant.pitch,
-        "speed": variant.speed,
-        "noise_scene": variant.noise_scene,
-        "impairment_type": variant.impairment_type,
-        "variant_kind": variant.variant_kind,
-        "duration_sec": variant.duration_sec,
+        "id": spec.id,
+        "name": spec.name,
+        "description": spec.description,
+        "target_keyword": spec.target_keyword,
+        "target_keyword_normalized": spec.target_keyword_normalized,
+        "sampling_seed": spec.sampling_seed,
+        "status": spec.status,
+        "quotas": spec.quotas,
+        "filters": spec.filters,
+        "balance_by": spec.balance_by,
+        "min_duration_sec": spec.min_duration_sec,
+        "max_duration_sec": spec.max_duration_sec,
+        "created_at": spec.created_at.isoformat(),
+        "updated_at": spec.updated_at.isoformat(),
+    }
+
+
+def _version_payload(version: DatasetVersion) -> dict[str, Any]:
+    return {
+        "id": version.id,
+        "dataset_spec_id": version.dataset_spec_id,
+        "version": version.version,
+        "name": version.name,
+        "build_status": version.build_status,
+        "sampling_seed": version.sampling_seed,
+        "rules_snapshot": version.rules_snapshot,
+        "coverage_summary": version.coverage_summary,
+        "item_count": version.item_count,
+        "total_duration_sec": version.total_duration_sec,
+        "export_path": version.export_path,
+        "created_at": version.created_at.isoformat(),
+        "built_at": version.built_at.isoformat() if version.built_at else None,
+        "exported_at": version.exported_at.isoformat() if version.exported_at else None,
+    }
+
+
+def _item_payload(item: DatasetItem) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "dataset_version_id": item.dataset_version_id,
+        "variant_id": item.variant_id,
+        "sample_type": item.sample_type,
+        "text": item.text,
+        "normalized_text": item.normalized_text,
+        "duration_sec": item.duration_sec,
+        "selection_reason": item.selection_reason,
+        "selection_rank": item.selection_rank,
+        "metadata_snapshot": item.metadata_snapshot,
     }
 
 
@@ -175,56 +171,19 @@ def build_dataset_version(spec_id: str, request: Request) -> dict[str, Any]:
         _validate_filter_config(spec.filters)
         _validate_balance_by(spec.balance_by)
 
-        all_ready_variants = session.exec(select(AudioVariant).where(AudioVariant.quality_status == "ready").order_by(AudioVariant.id)).all()
-        overrides = session.exec(select(ManualOverride).where(ManualOverride.dataset_spec_id == spec_id).order_by(ManualOverride.id)).all()
-        include_ids = {item.variant_id for item in overrides if item.action == "include"}
-        include_variants_by_id: dict[str, AudioVariant] = {}
-        if include_ids:
-            include_variants = session.exec(select(AudioVariant).where(AudioVariant.id.in_(include_ids)).order_by(AudioVariant.id)).all()
-            include_variants_by_id = {item.id: item for item in include_variants}
-            missing_include_ids = sorted(include_ids - set(include_variants_by_id))
-            if missing_include_ids:
-                raise HTTPException(status_code=400, detail=f"manual include variant not found: {', '.join(missing_include_ids)}")
-            not_ready_include_ids = sorted(item.id for item in include_variants if item.quality_status != "ready")
-            if not_ready_include_ids:
-                raise HTTPException(status_code=400, detail=f"manual include variant must be ready: {', '.join(not_ready_include_ids)}")
-            wrong_type_include_ids = sorted(item.id for item in include_variants if item.sample_type not in spec.quotas)
-            if wrong_type_include_ids:
-                raise HTTPException(status_code=400, detail=f"manual include sample_type must be in quotas: {', '.join(wrong_type_include_ids)}")
-
-        auto_variants = [item for item in all_ready_variants if _matches_filters(item, spec.filters)]
-        if spec.min_duration_sec is not None:
-            auto_variants = [item for item in auto_variants if item.duration_sec >= spec.min_duration_sec]
-        if spec.max_duration_sec is not None:
-            auto_variants = [item for item in auto_variants if item.duration_sec <= spec.max_duration_sec]
-        auto_variants = [item for item in auto_variants if item.sample_type in spec.quotas]
-
-        include_variants = [include_variants_by_id[item_id] for item_id in sorted(include_variants_by_id)]
-        variants_by_id = {item.id: item for item in auto_variants}
-        for item in include_variants:
-            variants_by_id[item.id] = item
-        variants = list(variants_by_id.values())
-        candidates = [_variant_to_candidate(item) for item in variants]
         try:
-            result = sample_candidates(
-                candidates=candidates,
-                quotas=spec.quotas,
-                balance_by=spec.balance_by,
-                seed=spec.sampling_seed,
-                overrides=[ManualOverrideInput(item.variant_id, item.action, item.reason) for item in overrides],
-            )
+            selection = select_spec_samples(spec, session)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        selected_by_id = {item.variant_id: item for item in result.items}
-        selected_variants = [item for item in variants if item.id in selected_by_id]
-        selected_variants.sort(key=lambda item: selected_by_id[item.id].selection_rank)
+        overrides = selection.overrides
+        selected_by_id = selection.selected_by_id
+        selected_variants = selection.selected_variants
 
         existing_versions = session.exec(select(DatasetVersion).where(DatasetVersion.dataset_spec_id == spec_id)).all()
         version_number = max((item.version for item in existing_versions), default=0) + 1
         version_id = new_id("dsv")
-        snapshots_by_variant_id = {item.id: _metadata_snapshot(item) for item in selected_variants}
-        snapshots = [snapshots_by_variant_id[item.id] for item in selected_variants]
-        coverage = build_coverage_summary(snapshots, spec.balance_by + ["sample_type"], result.shortfalls)
+        snapshots_by_variant_id = {item["variant_id"]: item for item in selection.snapshots}
+        coverage = selection.coverage_summary
         version = DatasetVersion(
             id=version_id,
             dataset_spec_id=spec.id,
@@ -245,7 +204,7 @@ def build_dataset_version(spec_id: str, request: Request) -> dict[str, Any]:
                     {"variant_id": item.variant_id, "action": item.action, "reason": item.reason}
                     for item in sorted(overrides, key=lambda row: row.id)
                 ],
-                "shortfalls": result.shortfalls,
+                "shortfalls": selection.result.shortfalls,
             },
             coverage_summary=coverage,
             item_count=len(selected_variants),
@@ -279,6 +238,68 @@ def build_dataset_version(spec_id: str, request: Request) -> dict[str, Any]:
         "total_duration_sec": version.total_duration_sec,
         "coverage_summary": version.coverage_summary,
     }
+
+
+@router.get("/api/dataset-specs")
+def list_dataset_specs(request: Request) -> dict[str, Any]:
+    with Session(request.app.state.engine) as session:
+        specs = session.exec(select(DatasetSpec).order_by(DatasetSpec.created_at.desc())).all()
+    return {"items": [_spec_payload(spec) for spec in specs]}
+
+
+@router.get("/api/dataset-specs/{spec_id}")
+def get_dataset_spec(spec_id: str, request: Request) -> dict[str, Any]:
+    with Session(request.app.state.engine) as session:
+        spec = session.get(DatasetSpec, spec_id)
+        if spec is None:
+            raise HTTPException(status_code=404, detail="dataset spec not found")
+        overrides = session.exec(select(ManualOverride).where(ManualOverride.dataset_spec_id == spec_id).order_by(ManualOverride.id)).all()
+    payload = _spec_payload(spec)
+    payload["overrides"] = [
+        {"id": item.id, "variant_id": item.variant_id, "action": item.action, "reason": item.reason, "created_at": item.created_at.isoformat()}
+        for item in overrides
+    ]
+    return payload
+
+
+@router.post("/api/dataset-specs/{spec_id}/preview")
+def preview_dataset_spec(spec_id: str, request: Request) -> dict[str, Any]:
+    with Session(request.app.state.engine) as session:
+        spec = session.get(DatasetSpec, spec_id)
+        if spec is None:
+            raise HTTPException(status_code=404, detail="dataset spec not found")
+        _validate_filter_config(spec.filters)
+        _validate_balance_by(spec.balance_by)
+        try:
+            return preview_spec_selection(spec, session)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/api/dataset-versions")
+def list_dataset_versions(request: Request) -> dict[str, Any]:
+    with Session(request.app.state.engine) as session:
+        versions = session.exec(select(DatasetVersion).order_by(DatasetVersion.created_at.desc())).all()
+    return {"items": [_version_payload(version) for version in versions]}
+
+
+@router.get("/api/dataset-versions/{version_id}")
+def get_dataset_version(version_id: str, request: Request) -> dict[str, Any]:
+    with Session(request.app.state.engine) as session:
+        version = session.get(DatasetVersion, version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="dataset version not found")
+    return _version_payload(version)
+
+
+@router.get("/api/dataset-versions/{version_id}/items")
+def list_dataset_version_items(version_id: str, request: Request) -> dict[str, Any]:
+    with Session(request.app.state.engine) as session:
+        version = session.get(DatasetVersion, version_id)
+        if version is None:
+            raise HTTPException(status_code=404, detail="dataset version not found")
+        items = session.exec(select(DatasetItem).where(DatasetItem.dataset_version_id == version_id).order_by(DatasetItem.selection_rank)).all()
+    return {"items": [_item_payload(item) for item in items]}
 
 
 @router.post("/api/dataset-versions/{version_id}/export")
