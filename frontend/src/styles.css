@@ -57,3 +57,166 @@ textarea {
   flex: 1;
   padding: 28px;
 }
+
+h1 {
+  margin-top: 0;
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.metric-card,
+.panel {
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.metric-card span {
+  display: block;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 28px;
+}
+
+.toolbar,
+.bulk-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+button.primary,
+.toolbar button,
+.bulk-toolbar button {
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 12px;
+  color: #fff;
+  background: #2563eb;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+input,
+select,
+textarea {
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: #e5e7eb;
+  background: #0f172a;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #111827;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+th,
+td {
+  padding: 10px;
+  border-bottom: 1px solid #1f2937;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: #cbd5e1;
+  background: #1f2937;
+}
+
+.muted {
+  color: #94a3b8;
+}
+
+.error-summary,
+.warning-box {
+  border: 1px solid #92400e;
+  border-radius: 8px;
+  padding: 12px;
+  background: #451a03;
+  color: #fed7aa;
+  margin: 12px 0;
+}
+
+.status-badge {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 12px;
+  background: #334155;
+  color: #e5e7eb;
+}
+
+.status-ready,
+.status-can_import {
+  background: #065f46;
+  color: #d1fae5;
+}
+
+.status-draft {
+  background: #78350f;
+  color: #fde68a;
+}
+
+.status-error,
+.status-invalid {
+  background: #7f1d1d;
+  color: #fecaca;
+}
+
+.status-duplicate {
+  background: #3730a3;
+  color: #ddd6fe;
+}
+
+.audio-player {
+  max-width: 220px;
+  width: 100%;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag {
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #1f2937;
+  color: #cbd5e1;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: #cbd5e1;
+}
