@@ -84,6 +84,22 @@ eval_project:
 
 第一版导出会生成 `eval_config_snippet.yaml`。将其中内容复制到评测项目的 experiment config 即可运行离线评测。
 
+## Generation / Enhancement
+
+The C-loop MVP supports synchronous transform jobs from existing audio variants:
+
+- `volume_gain` with `gain_db`
+- `speed_change` with `speed_factor`
+- `noise_mix` with `snr_db` and optional `seed`
+
+Generated WAV files are written to:
+
+```text
+data/library/variants/
+```
+
+Each generated row is stored as a child `AudioVariant` with `parent_variant_id`, `variant_kind`, `processing_params`, and `impairment_chain`. Generated variants start as `draft`; review them in Assets before marking them `ready`.
+
 ## Frontend Development
 
 The platform UI is a React + Vite + TypeScript app under `frontend/`.
