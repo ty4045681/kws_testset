@@ -1,0 +1,135 @@
+from pathlib import Path
+
+from sqlmodel import Session
+
+from kws_testset.models.audio import AudioVariant
+
+
+def _import_ready_asset(client, wav_factory, name: str = "transform_input.wav") -> dict:
+    before = {item["id"] for item in client.get("/api/assets").json()["items"]}
+    wav_path = wav_factory(name)
+    response = client.post(
+        "/api/imports",
+        json={
+            "name": f"transform_batch_{name}",
+            "files": [
+                {
+                    "path": str(wav_path),
+                    "text": "你好小智",
+                    "sample_type": "wake_positive",
+                    "quality_status": "ready",
+                    "voice_source": "human",
+                    "gender": "female",
+                    "age_group": "adult",
+                    "volume": "normal",
+                    "pitch": "normal",
+                    "speed": "normal",
+                    "noise_scene": "clean",
+                    "impairment_type": "none",
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200
+    assets = client.get("/api/assets").json()["items"]
+    created = [item for item in assets if item["id"] not in before]
+    assert len(created) == 1
+    return created[0]
+
+
+def test_create_transform_job_rejects_unknown_transform_kind(client, wav_factory):
+    asset = _import_ready_asset(client, wav_factory, "unknown_transform.wav")
+
+    response = client.post(
+        "/api/transform-jobs",
+        json={"variant_ids": [asset["id"]], "transform_kind": "not_real", "params": {}},
+    )
+
+    assert response.status_code == 400
+    assert "unknown transform_kind" in response.json()["detail"]
+
+
+def test_volume_gain_transform_creates_draft_child_variant_with_lineage(client, wav_factory):
+    parent = _import_ready_asset(client, wav_factory, "volume_gain_parent.wav")
+
+    response = client.post(
+        "/api/transform-jobs",
+        json={"variant_ids": [parent["id"]], "transform_kind": "volume_gain", "params": {"gain_db": 6.0}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["requested_count"] == 1
+    assert payload["created_count"] == 1
+    assert payload["failed_count"] == 0
+    assert len(payload["created_variant_ids"]) == 1
+    assert payload["results"] == [
+        {
+            "input_variant_id": parent["id"],
+            "status": "created",
+            "created_variant_id": payload["created_variant_ids"][0],
+            "errors": [],
+        }
+    ]
+
+    child_id = payload["created_variant_ids"][0]
+    with Session(client.app.state.engine) as session:
+        parent_row = session.get(AudioVariant, parent["id"])
+        child = session.get(AudioVariant, child_id)
+
+    assert parent_row is not None
+    assert child is not None
+    assert child.parent_variant_id == parent["id"]
+    assert child.source_id == parent_row.source_id
+    assert child.variant_kind == "volume_gain"
+    assert child.quality_status == "draft"
+    assert child.text == parent_row.text
+    assert child.sha256 != parent_row.sha256
+    assert child.processing_params == {"transform_kind": "volume_gain", "params": {"gain_db": 6.0}}
+    assert child.impairment_chain[-1] == {"transform_kind": "volume_gain", "params": {"gain_db": 6.0}}
+    assert Path(child.stored_path).exists()
+    assert "library" in Path(child.stored_path).parts
+    assert "variants" in Path(child.stored_path).parts
+
+
+def test_transform_jobs_can_be_listed_and_fetched(client, wav_factory):
+    asset = _import_ready_asset(client, wav_factory, "transform_list.wav")
+    create_response = client.post(
+        "/api/transform-jobs",
+        json={"variant_ids": [asset["id"]], "transform_kind": "volume_gain", "params": {"gain_db": -3.0}},
+    )
+    assert create_response.status_code == 200
+    job_id = create_response.json()["id"]
+
+    list_response = client.get("/api/transform-jobs")
+    detail_response = client.get(f"/api/transform-jobs/{job_id}")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["items"][0]["id"] == job_id
+    assert detail_response.status_code == 200
+    assert detail_response.json()["id"] == job_id
+    assert detail_response.json()["created_count"] == 1
+
+
+def test_transform_job_reports_missing_variants_per_row(client, wav_factory):
+    asset = _import_ready_asset(client, wav_factory, "transform_partial.wav")
+
+    response = client.post(
+        "/api/transform-jobs",
+        json={"variant_ids": [asset["id"], "missing_variant"], "transform_kind": "volume_gain", "params": {"gain_db": 3.0}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "partial"
+    assert payload["requested_count"] == 2
+    assert payload["created_count"] == 1
+    assert payload["failed_count"] == 1
+    assert payload["results"][0]["status"] == "created"
+    assert payload["results"][1] == {
+        "input_variant_id": "missing_variant",
+        "status": "error",
+        "created_variant_id": None,
+        "errors": ["variant not found"],
+    }

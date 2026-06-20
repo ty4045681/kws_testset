@@ -10,6 +10,7 @@ from kws_testset.api.assets import router as assets_router
 from kws_testset.api.datasets import router as datasets_router
 from kws_testset.api.imports import router as imports_router
 from kws_testset.api.taxonomy import router as taxonomy_router
+from kws_testset.api.transforms import router as transforms_router
 from kws_testset.config import load_config
 from kws_testset.db import create_engine_for_config, init_db
 
@@ -40,6 +41,7 @@ def create_app(config_path: str | Path = "configs/app.yaml", frontend_dist: str 
     app.include_router(assets_router)
     app.include_router(datasets_router)
     app.include_router(taxonomy_router)
+    app.include_router(transforms_router)
 
     dist_path = Path(frontend_dist) if frontend_dist is not None else _default_frontend_dist()
     if dist_path.exists() and (dist_path / "index.html").exists():
