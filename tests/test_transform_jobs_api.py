@@ -1,13 +1,15 @@
+import math
 from pathlib import Path
+import struct
+import wave
 
 from sqlmodel import Session
 
 from kws_testset.models.audio import AudioVariant
 
 
-def _import_ready_asset(client, wav_factory, name: str = "transform_input.wav") -> dict:
+def _import_ready_path(client, wav_path: Path, name: str) -> dict:
     before = {item["id"] for item in client.get("/api/assets").json()["items"]}
-    wav_path = wav_factory(name)
     response = client.post(
         "/api/imports",
         json={
@@ -35,6 +37,26 @@ def _import_ready_asset(client, wav_factory, name: str = "transform_input.wav") 
     created = [item for item in assets if item["id"] not in before]
     assert len(created) == 1
     return created[0]
+
+
+def _import_ready_asset(client, wav_factory, name: str = "transform_input.wav") -> dict:
+    return _import_ready_path(client, wav_factory(name), name)
+
+
+def _write_mixed_sine_wav(path: Path, seconds: float = 0.15) -> Path:
+    sample_rate = 16000
+    frames = int(sample_rate * seconds)
+    samples = []
+    for frame in range(frames):
+        t = frame / sample_rate
+        value = 9000 * math.sin(2 * math.pi * 700 * t) + 5000 * math.sin(2 * math.pi * 5200 * t)
+        samples.append(max(-32768, min(32767, int(round(value)))))
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(struct.pack(f"<{len(samples)}h", *samples))
+    return path
 
 
 def test_create_transform_job_rejects_unknown_transform_kind(client, wav_factory):
@@ -133,3 +155,33 @@ def test_transform_job_reports_missing_variants_per_row(client, wav_factory):
         "created_variant_id": None,
         "errors": ["variant not found"],
     }
+
+
+def test_narrowband_transform_creates_draft_child_variant_with_lineage(client, tmp_path):
+    parent = _import_ready_path(client, _write_mixed_sine_wav(tmp_path / "narrowband_parent.wav"), "narrowband_parent.wav")
+
+    response = client.post(
+        "/api/transform-jobs",
+        json={"variant_ids": [parent["id"]], "transform_kind": "narrowband", "params": {"target_sample_rate": 8000}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["created_count"] == 1
+    assert payload["failed_count"] == 0
+
+    child_id = payload["created_variant_ids"][0]
+    with Session(client.app.state.engine) as session:
+        parent_row = session.get(AudioVariant, parent["id"])
+        child = session.get(AudioVariant, child_id)
+
+    assert parent_row is not None
+    assert child is not None
+    assert child.parent_variant_id == parent["id"]
+    assert child.variant_kind == "narrowband"
+    assert child.quality_status == "draft"
+    assert child.sample_rate == parent_row.sample_rate
+    assert child.sha256 != parent_row.sha256
+    assert child.processing_params == {"transform_kind": "narrowband", "params": {"target_sample_rate": 8000}}
+    assert child.impairment_chain[-1] == {"transform_kind": "narrowband", "params": {"target_sample_rate": 8000}}

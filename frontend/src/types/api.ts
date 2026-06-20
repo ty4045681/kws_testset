@@ -97,7 +97,16 @@ export type BulkUpdateResponse = {
   results: Record<string, { ok: boolean; errors: string[]; warnings: string[] }>;
 };
 
-export type TransformKind = 'volume_gain' | 'speed_change' | 'noise_mix';
+export type TransformKind =
+  | 'volume_gain'
+  | 'speed_change'
+  | 'noise_mix'
+  | 'subband_eq'
+  | 'band_limit'
+  | 'narrowband'
+  | 'spectral_mask'
+  | 'amp_distortion'
+  | 'signal_mimic';
 
 export type TransformJobResult = {
   input_variant_id: string;

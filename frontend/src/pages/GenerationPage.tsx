@@ -4,6 +4,38 @@ import { ErrorSummary } from '../components/ErrorSummary';
 import { StatusBadge } from '../components/StatusBadge';
 import type { Asset, TransformJob, TransformKind } from '../types/api';
 
+type BandLimitMode = 'freq' | 'iir' | 'resample';
+type AmpDistortionType = 'gain_db' | 'max_distortion' | 'fence_distortion' | 'jag_distortion' | 'poly_distortion' | 'quad_distortion';
+
+type ParamState = {
+  gainDb: number;
+  speedFactor: number;
+  snrDb: number;
+  seed: number;
+  bandLimitMode: BandLimitMode;
+  cutoffHz: number;
+  narrowbandRate: number;
+  distortionType: AmpDistortionType;
+  distortionRate: number;
+  distortionGainDb: number;
+  distortionMaxDb: number;
+  distortionMaskNumber: number;
+};
+
+const transformOptions: TransformKind[] = [
+  'volume_gain',
+  'speed_change',
+  'noise_mix',
+  'subband_eq',
+  'band_limit',
+  'narrowband',
+  'spectral_mask',
+  'amp_distortion',
+  'signal_mimic'
+];
+
+const seedKinds = new Set<TransformKind>(['noise_mix', 'subband_eq', 'spectral_mask', 'amp_distortion', 'signal_mimic']);
+
 async function loadAllAssets(): Promise<Asset[]> {
   const limit = 500;
   let offset = 0;
@@ -16,10 +48,29 @@ async function loadAllAssets(): Promise<Asset[]> {
   }
 }
 
-function paramsFor(kind: TransformKind, gainDb: number, speedFactor: number, snrDb: number, seed: number): Record<string, string | number> {
-  if (kind === 'volume_gain') return { gain_db: gainDb };
-  if (kind === 'speed_change') return { speed_factor: speedFactor };
-  return { snr_db: snrDb, seed, noise_scene: 'other', snr_bucket: 'unknown' };
+function paramsFor(kind: TransformKind, state: ParamState): Record<string, string | number> {
+  if (kind === 'volume_gain') return { gain_db: state.gainDb };
+  if (kind === 'speed_change') return { speed_factor: state.speedFactor };
+  if (kind === 'noise_mix') return { snr_db: state.snrDb, seed: state.seed, noise_scene: 'other', snr_bucket: 'unknown' };
+  if (kind === 'subband_eq') return { seed: state.seed };
+  if (kind === 'band_limit') {
+    const params: Record<string, string | number> = { mode: state.bandLimitMode, cutoff_hz: state.cutoffHz };
+    if (state.bandLimitMode === 'resample') params.target_sample_rate = state.narrowbandRate;
+    return params;
+  }
+  if (kind === 'narrowband') return { target_sample_rate: state.narrowbandRate };
+  if (kind === 'spectral_mask') return { seed: state.seed };
+  if (kind === 'signal_mimic') return { seed: state.seed };
+
+  const params: Record<string, string | number> = {
+    distortion_type: state.distortionType,
+    rate: state.distortionRate,
+    seed: state.seed
+  };
+  if (state.distortionType === 'gain_db') params.gain_db = state.distortionGainDb;
+  if (state.distortionType === 'max_distortion' || state.distortionType === 'fence_distortion') params.max_db = state.distortionMaxDb;
+  if (state.distortionType === 'fence_distortion' || state.distortionType === 'jag_distortion') params.mask_number = state.distortionMaskNumber;
+  return params;
 }
 
 export function GenerationPage() {
@@ -31,6 +82,14 @@ export function GenerationPage() {
   const [speedFactor, setSpeedFactor] = useState(1.1);
   const [snrDb, setSnrDb] = useState(20);
   const [seed, setSeed] = useState(20260620);
+  const [bandLimitMode, setBandLimitMode] = useState<BandLimitMode>('freq');
+  const [cutoffHz, setCutoffHz] = useState(4000);
+  const [narrowbandRate, setNarrowbandRate] = useState(8000);
+  const [distortionType, setDistortionType] = useState<AmpDistortionType>('max_distortion');
+  const [distortionRate, setDistortionRate] = useState(0.8);
+  const [distortionGainDb, setDistortionGainDb] = useState(6);
+  const [distortionMaxDb, setDistortionMaxDb] = useState(-1);
+  const [distortionMaskNumber, setDistortionMaskNumber] = useState(4);
   const [lastJob, setLastJob] = useState<TransformJob | null>(null);
   const [error, setError] = useState<unknown>(null);
 
@@ -53,7 +112,20 @@ export function GenerationPage() {
     const job = await api.createTransformJob({
       variant_ids: Array.from(selected),
       transform_kind: kind,
-      params: paramsFor(kind, gainDb, speedFactor, snrDb, seed)
+      params: paramsFor(kind, {
+        gainDb,
+        speedFactor,
+        snrDb,
+        seed,
+        bandLimitMode,
+        cutoffHz,
+        narrowbandRate,
+        distortionType,
+        distortionRate,
+        distortionGainDb,
+        distortionMaxDb,
+        distortionMaskNumber
+      })
     });
     setLastJob(job);
     setSelected(new Set());
@@ -69,9 +141,9 @@ export function GenerationPage() {
           <label>
             transform
             <select value={kind} onChange={(event) => setKind(event.target.value as TransformKind)}>
-              <option value="volume_gain">volume_gain</option>
-              <option value="speed_change">speed_change</option>
-              <option value="noise_mix">noise_mix</option>
+              {transformOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
             </select>
           </label>
           {kind === 'volume_gain' ? (
@@ -87,16 +159,81 @@ export function GenerationPage() {
             </label>
           ) : null}
           {kind === 'noise_mix' ? (
+            <label>
+              snr_db
+              <input type="number" step="1" value={snrDb} onChange={(event) => setSnrDb(Number(event.target.value))} />
+            </label>
+          ) : null}
+          {kind === 'band_limit' ? (
             <>
               <label>
-                snr_db
-                <input type="number" step="1" value={snrDb} onChange={(event) => setSnrDb(Number(event.target.value))} />
+                mode
+                <select value={bandLimitMode} onChange={(event) => setBandLimitMode(event.target.value as BandLimitMode)}>
+                  <option value="freq">freq</option>
+                  <option value="iir">iir</option>
+                  <option value="resample">resample</option>
+                </select>
               </label>
               <label>
-                seed
-                <input type="number" value={seed} onChange={(event) => setSeed(Number(event.target.value))} />
+                cutoff_hz
+                <input type="number" step="100" min="20" max="7999" value={cutoffHz} onChange={(event) => setCutoffHz(Number(event.target.value))} />
               </label>
+              {bandLimitMode === 'resample' ? (
+                <label>
+                  target_sample_rate
+                  <input type="number" step="1000" min="1000" max="15000" value={narrowbandRate} onChange={(event) => setNarrowbandRate(Number(event.target.value))} />
+                </label>
+              ) : null}
             </>
+          ) : null}
+          {kind === 'narrowband' ? (
+            <label>
+              target_sample_rate
+              <input type="number" step="1000" min="1000" max="15000" value={narrowbandRate} onChange={(event) => setNarrowbandRate(Number(event.target.value))} />
+            </label>
+          ) : null}
+          {kind === 'amp_distortion' ? (
+            <>
+              <label>
+                distortion_type
+                <select value={distortionType} onChange={(event) => setDistortionType(event.target.value as AmpDistortionType)}>
+                  <option value="gain_db">gain_db</option>
+                  <option value="max_distortion">max_distortion</option>
+                  <option value="fence_distortion">fence_distortion</option>
+                  <option value="jag_distortion">jag_distortion</option>
+                  <option value="poly_distortion">poly_distortion</option>
+                  <option value="quad_distortion">quad_distortion</option>
+                </select>
+              </label>
+              <label>
+                rate
+                <input type="number" step="0.05" min="0" max="1" value={distortionRate} onChange={(event) => setDistortionRate(Number(event.target.value))} />
+              </label>
+              {distortionType === 'gain_db' ? (
+                <label>
+                  gain_db
+                  <input type="number" step="0.5" min="-30" max="30" value={distortionGainDb} onChange={(event) => setDistortionGainDb(Number(event.target.value))} />
+                </label>
+              ) : null}
+              {distortionType === 'max_distortion' || distortionType === 'fence_distortion' ? (
+                <label>
+                  max_db
+                  <input type="number" step="0.5" max="0" value={distortionMaxDb} onChange={(event) => setDistortionMaxDb(Number(event.target.value))} />
+                </label>
+              ) : null}
+              {distortionType === 'fence_distortion' || distortionType === 'jag_distortion' ? (
+                <label>
+                  mask_number
+                  <input type="number" step="1" min="0" max="12" value={distortionMaskNumber} onChange={(event) => setDistortionMaskNumber(Number(event.target.value))} />
+                </label>
+              ) : null}
+            </>
+          ) : null}
+          {seedKinds.has(kind) ? (
+            <label>
+              seed
+              <input type="number" value={seed} onChange={(event) => setSeed(Number(event.target.value))} />
+            </label>
           ) : null}
         </div>
         <div className="toolbar">

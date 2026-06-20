@@ -91,6 +91,12 @@ The C-loop MVP supports synchronous transform jobs from existing audio variants:
 - `volume_gain` with `gain_db`
 - `speed_change` with `speed_factor`
 - `noise_mix` with `snr_db` and optional `seed`
+- `subband_eq` for seeded random subband attenuation
+- `band_limit` for FFT, IIR, or resample-based low-pass degradation
+- `narrowband` for downsample-then-upsample telephone-band style audio
+- `spectral_mask` for seeded time/frequency attenuation
+- `amp_distortion` for sample-level nonlinear distortion
+- `signal_mimic` for a seeded composite degradation chain
 
 Generated WAV files are written to:
 
@@ -99,6 +105,8 @@ data/library/variants/
 ```
 
 Each generated row is stored as a child `AudioVariant` with `parent_variant_id`, `variant_kind`, `processing_params`, and `impairment_chain`. Generated variants start as `draft`; review them in Assets before marking them `ready`.
+
+The reference enhancement transforms use NumPy/SciPy for DSP operations such as STFT, filtering, and polyphase resampling.
 
 ## Frontend Development
 
