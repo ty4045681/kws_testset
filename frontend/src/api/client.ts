@@ -2,6 +2,7 @@ import type {
   Asset,
   AssetListResponse,
   BulkUpdateResponse,
+  CreateTransformJobRequest,
   DatasetItem,
   DatasetPreview,
   DatasetSpec,
@@ -10,6 +11,7 @@ import type {
   ImportBatch,
   ImportCommitFile,
   Taxonomy,
+  TransformJob,
   UploadResponse
 } from '../types/api';
 
@@ -67,6 +69,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ asset_ids: assetIds, patch })
     }),
+  listTransformJobs: () => requestJson<{ items: TransformJob[] }>('/api/transform-jobs'),
+  createTransformJob: (payload: CreateTransformJobRequest) =>
+    requestJson<TransformJob>('/api/transform-jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }),
+  getTransformJob: (id: string) => requestJson<TransformJob>(`/api/transform-jobs/${encodeURIComponent(id)}`),
   listDatasetSpecs: () => requestJson<{ items: DatasetSpec[] }>('/api/dataset-specs'),
   createDatasetSpec: (payload: {
     name: string;

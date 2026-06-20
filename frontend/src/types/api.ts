@@ -97,6 +97,37 @@ export type BulkUpdateResponse = {
   results: Record<string, { ok: boolean; errors: string[]; warnings: string[] }>;
 };
 
+export type TransformKind = 'volume_gain' | 'speed_change' | 'noise_mix';
+
+export type TransformJobResult = {
+  input_variant_id: string;
+  status: string;
+  created_variant_id: string | null;
+  errors: string[];
+};
+
+export type TransformJob = {
+  id: string;
+  transform_kind: TransformKind;
+  status: string;
+  input_variant_ids: string[];
+  processing_params: Record<string, unknown>;
+  requested_count: number;
+  created_count: number;
+  failed_count: number;
+  created_variant_ids: string[];
+  results: TransformJobResult[];
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
+export type CreateTransformJobRequest = {
+  variant_ids: string[];
+  transform_kind: TransformKind;
+  params: Record<string, string | number>;
+};
+
 export type DatasetSpec = {
   id: string;
   name: string;
