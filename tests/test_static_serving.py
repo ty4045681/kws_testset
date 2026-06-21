@@ -28,3 +28,16 @@ def test_spa_fallback_serves_index_for_frontend_routes(tmp_path: Path):
 
     assert response.status_code == 200
     assert "React App" in response.text
+
+
+def test_spa_fallback_does_not_capture_api_root(tmp_path: Path):
+    config_path = tmp_path / "app.yaml"
+    config_path.write_text(f"app:\n  data_dir: {tmp_path / 'data'}\n", encoding="utf-8")
+    dist_dir = tmp_path / "frontend_dist"
+    dist_dir.mkdir()
+    (dist_dir / "index.html").write_text("<html><body><div id='root'>React App</div></body></html>", encoding="utf-8")
+    client = TestClient(create_app(config_path=config_path, frontend_dist=dist_dir))
+
+    response = client.get("/api")
+
+    assert response.status_code == 404

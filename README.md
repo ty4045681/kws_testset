@@ -104,7 +104,7 @@ Generated WAV files are written to:
 data/library/variants/
 ```
 
-Each generated row is stored as a child `AudioVariant` with `parent_variant_id`, `variant_kind`, `processing_params`, and `impairment_chain`. Generated variants start as `draft`; review them in Assets before marking them `ready`.
+Each generated row is stored as a child `AudioVariant` with `parent_variant_id`, taxonomy-compatible `variant_kind`, `processing_params`, and `impairment_chain`. The exact transform kind and params are recorded in `processing_params` and appended to `impairment_chain`. Generated variants start as `draft`; review them in Assets before marking them `ready`.
 
 The reference enhancement transforms use NumPy/SciPy for DSP operations such as STFT, filtering, and polyphase resampling.
 

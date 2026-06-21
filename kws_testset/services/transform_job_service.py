@@ -14,6 +14,28 @@ from kws_testset.services.audio_transform_service import SUPPORTED_TRANSFORM_KIN
 from kws_testset.utils.ids import dated_id, new_id
 
 
+TRANSFORM_VARIANT_KINDS = {
+    "volume_gain": "volume_gain",
+    "speed_change": "speed_change",
+    "noise_mix": "noise_mix",
+    "subband_eq": "other",
+    "band_limit": "codec",
+    "narrowband": "codec",
+    "spectral_mask": "other",
+    "amp_distortion": "clipping",
+    "signal_mimic": "combined",
+}
+
+TRANSFORM_IMPAIRMENT_TYPES = {
+    "subband_eq": "other",
+    "band_limit": "codec",
+    "narrowband": "codec",
+    "spectral_mask": "other",
+    "amp_distortion": "clipping",
+    "signal_mimic": "other",
+}
+
+
 def transform_job_payload(job: TransformJob) -> dict[str, Any]:
     return {
         "id": job.id,
@@ -49,6 +71,7 @@ def _variant_metadata(parent: AudioVariant, transform_kind: str, params: dict[st
     speed = parent.speed
     noise_scene = parent.noise_scene
     snr_bucket = parent.snr_bucket
+    impairment_type = TRANSFORM_IMPAIRMENT_TYPES.get(transform_kind, parent.impairment_type)
     if transform_kind == "volume_gain":
         gain_db = float(params.get("gain_db", 0.0))
         volume = "high" if gain_db > 0 else "low"
@@ -58,7 +81,14 @@ def _variant_metadata(parent: AudioVariant, transform_kind: str, params: dict[st
     if transform_kind == "noise_mix":
         noise_scene = str(params.get("noise_scene", "other"))
         snr_bucket = str(params.get("snr_bucket", "unknown"))
-    return {"volume": volume, "speed": speed, "noise_scene": noise_scene, "snr_bucket": snr_bucket}
+    return {
+        "variant_kind": TRANSFORM_VARIANT_KINDS[transform_kind],
+        "volume": volume,
+        "speed": speed,
+        "noise_scene": noise_scene,
+        "snr_bucket": snr_bucket,
+        "impairment_type": impairment_type,
+    }
 
 
 def _create_child_variant(
@@ -67,23 +97,28 @@ def _create_child_variant(
     transform_kind: str,
     params: dict[str, Any],
     session: Session,
-) -> AudioVariant:
+) -> tuple[AudioVariant, bool]:
     probe = probe_wav(transformed_path)
+    record = _processing_record(transform_kind, params)
     existing = session.exec(select(AudioVariant).where(AudioVariant.sha256 == probe.sha256)).first()
     if existing is not None:
-        raise ValueError(f"generated variant already exists: {existing.id}")
+        transformed_path.unlink(missing_ok=True)
+        if existing.parent_variant_id == parent.id and existing.processing_params == record:
+            return existing, False
+        if existing.id == parent.id:
+            raise ValueError("transform produced audio identical to the source variant; adjust transform params")
+        raise ValueError(f"generated audio matches existing variant: {existing.id}")
 
     variant_id = dated_id("var", probe.sha256)
     final_path = transformed_path.parent / f"{variant_id}.wav"
     transformed_path.replace(final_path)
     probe = probe_wav(final_path)
-    record = _processing_record(transform_kind, params)
     metadata = _variant_metadata(parent, transform_kind, params)
     child = AudioVariant(
         id=variant_id,
         source_id=parent.source_id,
         parent_variant_id=parent.id,
-        variant_kind=transform_kind,
+        variant_kind=metadata["variant_kind"],
         stored_path=str(final_path.resolve()),
         sha256=probe.sha256,
         duration_sec=probe.duration_sec,
@@ -102,14 +137,14 @@ def _create_child_variant(
         speed=metadata["speed"],
         noise_scene=metadata["noise_scene"],
         snr_bucket=metadata["snr_bucket"],
-        impairment_type=parent.impairment_type,
+        impairment_type=metadata["impairment_type"],
         impairment_chain=[*parent.impairment_chain, record],
         processing_params=record,
         custom_tags=list(parent.custom_tags),
         notes=f"Generated from {parent.id} by {transform_kind}",
     )
     session.add(child)
-    return child
+    return child, True
 
 
 def create_transform_job(
@@ -156,12 +191,14 @@ def create_transform_job(
 
             temp_path = variants_root / f"{new_id('tmp')}.wav"
             apply_audio_transform(Path(parent.stored_path), temp_path, transform_kind, params)
-            child = _create_child_variant(parent, temp_path, transform_kind, params, session)
+            child, created = _create_child_variant(parent, temp_path, transform_kind, params, session)
             session.flush()
             savepoint.commit()
             created_count += 1
             created_variant_ids.append(child.id)
-            results.append({"input_variant_id": variant_id, "status": "created", "created_variant_id": child.id, "errors": []})
+            results.append(
+                {"input_variant_id": variant_id, "status": "created" if created else "existing", "created_variant_id": child.id, "errors": []}
+            )
         except Exception as exc:
             savepoint.rollback()
             if temp_path is not None:

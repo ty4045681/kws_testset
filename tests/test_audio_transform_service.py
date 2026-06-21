@@ -4,6 +4,7 @@ from pathlib import Path
 import wave
 
 import numpy as np
+import pytest
 
 from kws_testset.services.audio_probe import probe_wav
 from kws_testset.services.audio_transform_service import apply_audio_transform
@@ -100,6 +101,32 @@ def test_amp_distortion_changes_audio_and_stays_pcm16(tmp_path: Path):
     assert distorted.max() <= 32767
 
 
+def test_amp_distortion_rejects_zero_rate(tmp_path: Path):
+    source = tmp_path / "clean_zero_rate.wav"
+    output = tmp_path / "distorted_zero_rate.wav"
+    _write_pcm16(source, _sine(1000, amplitude=12000))
+
+    with pytest.raises(ValueError, match="rate must be greater than 0"):
+        apply_audio_transform(source, output, "amp_distortion", {"distortion_type": "max_distortion", "rate": 0.0})
+
+    assert not output.exists()
+
+
+def test_amp_distortion_low_rate_still_changes_short_non_silent_clip(tmp_path: Path):
+    source = tmp_path / "short_clean.wav"
+    output = tmp_path / "short_distorted.wav"
+    _write_pcm16(source, np.array([1000.0, -1000.0, 500.0, -500.0]))
+
+    apply_audio_transform(
+        source,
+        output,
+        "amp_distortion",
+        {"distortion_type": "max_distortion", "rate": 0.01, "max_db": -1.0, "seed": 1},
+    )
+
+    assert not np.array_equal(_read_pcm16(source), _read_pcm16(output))
+
+
 def test_amp_poly_distortion_changes_audio(tmp_path: Path):
     source = tmp_path / "clean_poly.wav"
     output = tmp_path / "distorted_poly.wav"
@@ -144,3 +171,27 @@ def test_signal_mimic_is_deterministic_with_seed(tmp_path: Path):
 
     assert first.read_bytes() == second.read_bytes()
     assert not np.array_equal(_read_pcm16(source), _read_pcm16(first))
+
+
+def test_signal_mimic_band_limit_handles_low_sample_rate(tmp_path: Path):
+    source = tmp_path / "low_rate.wav"
+    output = tmp_path / "low_rate_mimic.wav"
+    t = np.arange(400) / 2000
+    samples = 9000 * np.sin(2 * np.pi * 300 * t)
+    _write_pcm16(source, samples, sample_rate=2000)
+
+    apply_audio_transform(
+        source,
+        output,
+        "signal_mimic",
+        {
+            "seed": 3,
+            "subband_probability": 0.0,
+            "mute_probability": 0.0,
+            "band_limit_probability": 1.0,
+            "spectral_mask_probability": 0.0,
+            "narrowband_probability": 0.0,
+        },
+    )
+
+    assert probe_wav(output).sample_rate == 2000

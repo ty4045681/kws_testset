@@ -74,7 +74,7 @@ def list_assets(request: Request, limit: int = 200, offset: int = 0) -> dict[str
             condition = getattr(AudioVariant, field) == value
             query = query.where(condition)
             count_query = count_query.where(condition)
-    query = query.order_by(AudioVariant.created_at).offset(offset).limit(limit)
+    query = query.order_by(AudioVariant.created_at, AudioVariant.id).offset(offset).limit(limit)
     with Session(engine) as session:
         variants = session.exec(query).all()
         total = session.exec(count_query).one()

@@ -83,10 +83,11 @@ def save_uploads(files: list[UploadFile], config: AppConfig, session: Session) -
         try:
             probe = probe_wav(destination)
         except (OSError, EOFError, ValueError, wave.Error) as exc:
+            destination.unlink(missing_ok=True)
             rows.append(
                 UploadedAudioRow(
                     path=destination,
-                    original_filename=filename,
+                    original_filename=original_filename,
                     duration_sec=0.0,
                     sample_rate=0,
                     channels=0,

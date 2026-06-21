@@ -6,6 +6,18 @@ import { ErrorSummary } from '../components/ErrorSummary';
 import { StatusBadge } from '../components/StatusBadge';
 import type { Asset, Taxonomy } from '../types/api';
 
+async function loadAllAssets(params: Record<string, string | number> = {}): Promise<Asset[]> {
+  const limit = 500;
+  let offset = 0;
+  const assets: Asset[] = [];
+  while (true) {
+    const response = await api.listAssets({ ...params, limit, offset });
+    assets.push(...response.items);
+    offset += response.count;
+    if (assets.length >= response.total || response.count === 0) return assets;
+  }
+}
+
 export function AssetsPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [taxonomy, setTaxonomy] = useState<Taxonomy>({});
@@ -16,9 +28,8 @@ export function AssetsPage() {
 
   async function loadAssets(nextFilter = filter) {
     const params: Record<string, string> = nextFilter ? { sample_type: nextFilter } : {};
-    const response = await api.listAssets(params);
-    setAssets(response.items);
-    setPendingPatches({});
+    const items = await loadAllAssets(params);
+    setAssets(items.map((item) => ({ ...item, ...(pendingPatches[item.id] ?? {}) })));
   }
 
   useEffect(() => {

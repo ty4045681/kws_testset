@@ -53,9 +53,9 @@ def create_app(config_path: str | Path = "configs/app.yaml", frontend_dist: str 
 
         @app.get("/{full_path:path}", response_class=HTMLResponse)
         def spa_fallback(full_path: str) -> FileResponse:
-            if full_path.startswith("api/"):
+            if full_path == "api" or full_path.startswith("api/"):
                 raise HTTPException(status_code=404, detail="API route not found")
-            if full_path.startswith("ui-static/"):
+            if full_path == "ui-static" or full_path.startswith("ui-static/"):
                 raise HTTPException(status_code=404, detail="UI asset not found")
             return FileResponse(dist_path / "index.html")
     else:

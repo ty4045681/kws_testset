@@ -68,13 +68,35 @@ def _write_pcm16(path: Path, wav_data: Pcm16Wav) -> None:
 
 
 def _require_range(name: str, value: float, minimum: float, maximum: float) -> float:
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
     if not minimum <= value <= maximum:
         raise ValueError(f"{name} must be between {minimum:g} and {maximum:g}")
     return value
 
 
+def _param_float(params: dict[str, Any], name: str, default: float) -> float:
+    raw_value = params.get(name, default)
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number")
+    return value
+
+
+def _param_int(params: dict[str, Any], name: str, default: int) -> int:
+    raw_value = params.get(name, default)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    return value
+
+
 def _rng_from_params(params: dict[str, Any]) -> np.random.Generator:
-    return np.random.default_rng(int(params.get("seed", 0)))
+    return np.random.default_rng(_param_int(params, "seed", 0))
 
 
 def _match_length(samples: np.ndarray, frame_count: int) -> np.ndarray:
@@ -98,7 +120,7 @@ def _apply_channelwise(wav_data: Pcm16Wav, transform: Callable[[np.ndarray], np.
 
 
 def _volume_gain(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
-    gain_db = _require_range("gain_db", float(params.get("gain_db", 0.0)), -30.0, 30.0)
+    gain_db = _require_range("gain_db", _param_float(params, "gain_db", 0.0), -30.0, 30.0)
     if gain_db == 0.0:
         raise ValueError("gain_db must not be 0 for a generated variant")
     factor = math.pow(10.0, gain_db / 20.0)
@@ -110,7 +132,7 @@ def _volume_gain(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
 
 
 def _speed_change(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
-    speed_factor = _require_range("speed_factor", float(params.get("speed_factor", 1.0)), 0.5, 2.0)
+    speed_factor = _require_range("speed_factor", _param_float(params, "speed_factor", 1.0), 0.5, 2.0)
     if speed_factor == 1.0:
         raise ValueError("speed_factor must not be 1 for a generated variant")
     if wav_data.samples.size == 0:
@@ -128,7 +150,7 @@ def _speed_change(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
 
 
 def _noise_mix(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
-    snr_db = _require_range("snr_db", float(params.get("snr_db", 20.0)), -5.0, 40.0)
+    snr_db = _require_range("snr_db", _param_float(params, "snr_db", 20.0), -5.0, 40.0)
     if wav_data.samples.size == 0:
         return wav_data
     rng = _rng_from_params(params)
@@ -200,8 +222,8 @@ def _generate_subband_bins(rng: np.random.Generator, bin_count: int) -> list[int
 
 def _subband_eq(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
     rng = _rng_from_params(params)
-    low_min_db = float(params.get("low_min_gain_db", -10.0))
-    high_min_db = float(params.get("high_min_gain_db", -20.0))
+    low_min_db = _param_float(params, "low_min_gain_db", -10.0)
+    high_min_db = _param_float(params, "high_min_gain_db", -20.0)
 
     def transform(channel: np.ndarray) -> np.ndarray:
         freqs, _, spectrum, stft_params = _stft(channel, wav_data.sample_rate)
@@ -234,13 +256,13 @@ def _resample_to_rate(channel: np.ndarray, source_rate: int, target_rate: int) -
 def _band_limit(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
     mode = str(params.get("mode", params.get("limit", "freq")))
     nyquist = wav_data.sample_rate / 2
-    cutoff_hz = _require_range("cutoff_hz", float(params.get("cutoff_hz", min(4000.0, nyquist - 1))), 20.0, nyquist - 1)
+    cutoff_hz = _require_range("cutoff_hz", _param_float(params, "cutoff_hz", min(4000.0, nyquist - 1)), 20.0, nyquist - 1)
 
     if mode == "freq":
         return _apply_channelwise(wav_data, lambda channel: _lowpass_fft(channel, wav_data.sample_rate, cutoff_hz))
 
     if mode == "iir":
-        order = int(_require_range("filter_order", float(params.get("filter_order", 6)), 1, 12))
+        order = int(_require_range("filter_order", _param_float(params, "filter_order", 6), 1, 12))
         sos = signal.butter(order, cutoff_hz / nyquist, btype="lowpass", output="sos")
 
         def transform(channel: np.ndarray) -> np.ndarray:
@@ -251,7 +273,7 @@ def _band_limit(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
         return _apply_channelwise(wav_data, transform)
 
     if mode == "resample":
-        target_rate = int(params.get("target_sample_rate", max(1000, min(wav_data.sample_rate - 1, int(cutoff_hz * 2)))))
+        target_rate = _param_int(params, "target_sample_rate", max(1000, min(wav_data.sample_rate - 1, int(cutoff_hz * 2))))
         if not 1000 <= target_rate < wav_data.sample_rate:
             raise ValueError("target_sample_rate must be lower than the source sample rate")
         return _apply_channelwise(wav_data, lambda channel: _resample_to_rate(channel, wav_data.sample_rate, target_rate))
@@ -260,7 +282,7 @@ def _band_limit(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
 
 
 def _narrowband(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
-    target_rate = int(params.get("target_sample_rate", 8000))
+    target_rate = _param_int(params, "target_sample_rate", 8000)
     if not 1000 <= target_rate < wav_data.sample_rate:
         raise ValueError("target_sample_rate must be lower than the source sample rate")
     return _apply_channelwise(wav_data, lambda channel: _resample_to_rate(channel, wav_data.sample_rate, target_rate))
@@ -268,10 +290,10 @@ def _narrowband(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
 
 def _spectral_mask(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
     rng = _rng_from_params(params)
-    frequency_masks = int(_require_range("frequency_masks", float(params.get("frequency_masks", 2)), 1, 8))
-    time_masks = int(_require_range("time_masks", float(params.get("time_masks", 1)), 0, 8))
-    min_gain = _require_range("min_gain", float(params.get("min_gain", 0.05)), 0.0, 1.0)
-    max_gain = _require_range("max_gain", float(params.get("max_gain", 0.6)), min_gain, 1.0)
+    frequency_masks = int(_require_range("frequency_masks", _param_float(params, "frequency_masks", 2), 1, 8))
+    time_masks = int(_require_range("time_masks", _param_float(params, "time_masks", 1), 0, 8))
+    min_gain = _require_range("min_gain", _param_float(params, "min_gain", 0.05), 0.0, 1.0)
+    max_gain = _require_range("max_gain", _param_float(params, "max_gain", 0.6), min_gain, 1.0)
 
     def transform(channel: np.ndarray) -> np.ndarray:
         freqs, times, spectrum, stft_params = _stft(channel, wav_data.sample_rate)
@@ -327,19 +349,27 @@ def _poly_distortion(normalized: np.ndarray, a: float, m: int, n: int) -> np.nda
 
 def _amp_distortion(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
     distortion_type = str(params.get("distortion_type", "max_distortion"))
-    rate = _require_range("rate", float(params.get("rate", 0.8)), 0.0, 1.0)
+    rate = _require_range("rate", _param_float(params, "rate", 0.8), 0.0, 1.0)
+    if rate <= 0.0:
+        raise ValueError("rate must be greater than 0")
     rng = _rng_from_params(params)
     normalized = np.clip(wav_data.samples / PCM16_MAX, -1.0, 1.0)
     mutate = rng.random(normalized.shape) < rate
+    if normalized.size and not mutate.any():
+        flat_mutate = mutate.reshape(-1)
+        flat_samples = normalized.reshape(-1)
+        non_silent_indexes = np.flatnonzero(np.abs(flat_samples) > 1e-12)
+        candidate_indexes = non_silent_indexes if non_silent_indexes.size else np.arange(flat_mutate.size)
+        flat_mutate[int(rng.choice(candidate_indexes))] = True
 
     if distortion_type == "gain_db":
-        gain_db = _require_range("gain_db", float(params.get("gain_db", 6.0)), -30.0, 30.0)
+        gain_db = _require_range("gain_db", _param_float(params, "gain_db", 6.0), -30.0, 30.0)
         transformed = np.clip(normalized * _db2amp(gain_db), -0.997, 0.997)
     elif distortion_type == "max_distortion":
-        max_amp = min(0.997, _db2amp(float(params.get("max_db", -0.03))))
+        max_amp = min(0.997, _db2amp(_param_float(params, "max_db", -0.03)))
         transformed = np.sign(normalized) * max_amp
     elif distortion_type in {"fence_distortion", "jag_distortion"}:
-        mask_number = int(_require_range("mask_number", float(params.get("mask_number", 4)), 0, 12))
+        mask_number = int(_require_range("mask_number", _param_float(params, "mask_number", 4), 0, 12))
         positive_mask = _generate_amp_masks(rng, mask_number)
         negative_mask = _generate_amp_masks(rng, mask_number)
         abs_samples = np.abs(normalized)
@@ -349,7 +379,7 @@ def _amp_distortion(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
             _inside_amp_masks(abs_samples, negative_mask),
         )
         if distortion_type == "fence_distortion":
-            max_amp = min(0.997, _db2amp(float(params.get("max_db", -0.03))))
+            max_amp = min(0.997, _db2amp(_param_float(params, "max_db", -0.03)))
             transformed = np.where(included, np.sign(normalized) * max_amp, 0.0)
         else:
             transformed = np.where(included, normalized, 0.0)
@@ -357,9 +387,9 @@ def _amp_distortion(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
         if distortion_type == "quad_distortion":
             a, m, n = 1.0, 1, 1
         else:
-            a = float(params.get("a", 1.0))
-            m = int(_require_range("m", float(params.get("m", 1)), 1, 8))
-            n = int(_require_range("n", float(params.get("n", 1)), 1, 8))
+            a = _param_float(params, "a", 1.0)
+            m = int(_require_range("m", _param_float(params, "m", 1), 1, 8))
+            n = int(_require_range("n", _param_float(params, "n", 1), 1, 8))
         transformed = _poly_distortion(normalized, a, m, n)
     else:
         raise ValueError(
@@ -379,11 +409,11 @@ def _signal_mimic(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
     def child_seed() -> int:
         return int(rng.integers(0, 2**31 - 1))
 
-    if rng.random() < float(params.get("subband_probability", 0.4)):
+    if rng.random() < _param_float(params, "subband_probability", 0.4):
         output = _subband_eq(output, {"seed": child_seed()})
         applied = True
 
-    if output.samples.size and rng.random() < float(params.get("mute_probability", 0.1)):
+    if output.samples.size and rng.random() < _param_float(params, "mute_probability", 0.1):
         samples = output.samples.copy()
         frame_count = samples.shape[0]
         start = int(rng.integers(0, max(1, frame_count // 2)))
@@ -392,18 +422,19 @@ def _signal_mimic(wav_data: Pcm16Wav, params: dict[str, Any]) -> Pcm16Wav:
         output = Pcm16Wav(channels=output.channels, sample_rate=output.sample_rate, samples=samples)
         applied = True
 
-    if rng.random() < float(params.get("band_limit_probability", 0.5)):
-        cutoff_max = max(1200, min(int(output.sample_rate / 2) - 1, 4500))
-        cutoff_min = min(3000, cutoff_max)
-        cutoff_hz = int(rng.integers(cutoff_min, cutoff_max + 1))
-        output = _band_limit(output, {"mode": "freq", "cutoff_hz": cutoff_hz})
-        applied = True
+    if rng.random() < _param_float(params, "band_limit_probability", 0.5):
+        cutoff_upper = int(min((output.sample_rate / 2) - 1, 4500))
+        if cutoff_upper >= 20:
+            cutoff_lower = min(3000, max(20, int(cutoff_upper * 0.5)))
+            cutoff_hz = int(rng.integers(cutoff_lower, cutoff_upper + 1))
+            output = _band_limit(output, {"mode": "freq", "cutoff_hz": cutoff_hz})
+            applied = True
 
-    if rng.random() < float(params.get("spectral_mask_probability", 0.1)):
+    if rng.random() < _param_float(params, "spectral_mask_probability", 0.1):
         output = _spectral_mask(output, {"seed": child_seed()})
         applied = True
 
-    if rng.random() < float(params.get("narrowband_probability", 0.2)) and output.sample_rate > 8000:
+    if rng.random() < _param_float(params, "narrowband_probability", 0.2) and output.sample_rate > 8000:
         output = _narrowband(output, {"target_sample_rate": 8000})
         applied = True
 

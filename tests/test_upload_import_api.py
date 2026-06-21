@@ -63,6 +63,22 @@ def test_upload_rejects_non_wav_as_failed_row(client, tmp_path: Path):
     assert "WAV" in payload["files"][0]["error"]
 
 
+def test_upload_removes_invalid_wav_from_staging_dir(client, tmp_path: Path):
+    broken_wav = tmp_path / "broken.wav"
+    broken_wav.write_bytes(b"RIFF not really a wav")
+
+    with broken_wav.open("rb") as wav_file:
+        response = client.post(
+            "/api/imports/uploads",
+            files=[("files", ("broken.wav", wav_file, "audio/wav"))],
+        )
+
+    assert response.status_code == 200
+    row = response.json()["files"][0]
+    assert row["status"] == "error"
+    assert not Path(row["path"]).exists()
+
+
 def test_import_batches_can_be_listed_and_fetched(client, wav_factory):
     wav_path = wav_factory("batch_list.wav")
     response = client.post(

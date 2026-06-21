@@ -73,6 +73,13 @@ function paramsFor(kind: TransformKind, state: ParamState): Record<string, strin
   return params;
 }
 
+function invalidNumericParam(params: Record<string, string | number>): string | null {
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === 'number' && !Number.isFinite(value)) return key;
+  }
+  return null;
+}
+
 export function GenerationPage() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [jobs, setJobs] = useState<TransformJob[]>([]);
@@ -109,23 +116,29 @@ export function GenerationPage() {
       return;
     }
     setError(null);
+    const params = paramsFor(kind, {
+      gainDb,
+      speedFactor,
+      snrDb,
+      seed,
+      bandLimitMode,
+      cutoffHz,
+      narrowbandRate,
+      distortionType,
+      distortionRate,
+      distortionGainDb,
+      distortionMaxDb,
+      distortionMaskNumber
+    });
+    const invalidParam = invalidNumericParam(params);
+    if (invalidParam) {
+      setError(new Error(`${invalidParam} 必须是有效数字`));
+      return;
+    }
     const job = await api.createTransformJob({
       variant_ids: Array.from(selected),
       transform_kind: kind,
-      params: paramsFor(kind, {
-        gainDb,
-        speedFactor,
-        snrDb,
-        seed,
-        bandLimitMode,
-        cutoffHz,
-        narrowbandRate,
-        distortionType,
-        distortionRate,
-        distortionGainDb,
-        distortionMaxDb,
-        distortionMaskNumber
-      })
+      params
     });
     setLastJob(job);
     setSelected(new Set());
@@ -207,7 +220,7 @@ export function GenerationPage() {
               </label>
               <label>
                 rate
-                <input type="number" step="0.05" min="0" max="1" value={distortionRate} onChange={(event) => setDistortionRate(Number(event.target.value))} />
+                <input type="number" step="0.05" min="0.01" max="1" value={distortionRate} onChange={(event) => setDistortionRate(Number(event.target.value))} />
               </label>
               {distortionType === 'gain_db' ? (
                 <label>

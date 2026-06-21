@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from sqlmodel import Session
 
 from kws_testset.models.audio import AudioVariant
@@ -220,3 +222,40 @@ def test_assets_filter_before_pagination(client, wav_factory):
     assert payload["count"] == 1
     assert payload["total"] == 1
     assert payload["items"][0]["id"] == asset_id
+
+
+def test_assets_order_by_created_at_then_id_for_stable_pagination(client):
+    shared_created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with Session(client.app.state.engine) as session:
+        session.add(
+            AudioVariant(
+                id="var_b",
+                source_id="src_b",
+                variant_kind="original",
+                stored_path="/tmp/b.wav",
+                sha256="sha_b",
+                duration_sec=1.0,
+                sample_rate=16000,
+                channels=1,
+                created_at=shared_created_at,
+            )
+        )
+        session.add(
+            AudioVariant(
+                id="var_a",
+                source_id="src_a",
+                variant_kind="original",
+                stored_path="/tmp/a.wav",
+                sha256="sha_a",
+                duration_sec=1.0,
+                sample_rate=16000,
+                channels=1,
+                created_at=shared_created_at,
+            )
+        )
+        session.commit()
+
+    response = client.get("/api/assets?limit=2&offset=0")
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == ["var_a", "var_b"]

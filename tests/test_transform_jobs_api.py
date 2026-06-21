@@ -179,9 +179,73 @@ def test_narrowband_transform_creates_draft_child_variant_with_lineage(client, t
     assert parent_row is not None
     assert child is not None
     assert child.parent_variant_id == parent["id"]
-    assert child.variant_kind == "narrowband"
+    assert child.variant_kind == "codec"
+    assert child.impairment_type == "codec"
     assert child.quality_status == "draft"
     assert child.sample_rate == parent_row.sample_rate
     assert child.sha256 != parent_row.sha256
     assert child.processing_params == {"transform_kind": "narrowband", "params": {"target_sample_rate": 8000}}
     assert child.impairment_chain[-1] == {"transform_kind": "narrowband", "params": {"target_sample_rate": 8000}}
+
+
+def test_amp_distortion_transform_uses_clipping_taxonomy_kind(client, tmp_path):
+    parent = _import_ready_path(client, _write_mixed_sine_wav(tmp_path / "clipping_parent.wav"), "clipping_parent.wav")
+
+    response = client.post(
+        "/api/transform-jobs",
+        json={
+            "variant_ids": [parent["id"]],
+            "transform_kind": "amp_distortion",
+            "params": {"distortion_type": "max_distortion", "rate": 1.0, "max_db": -1.0, "seed": 5},
+        },
+    )
+
+    assert response.status_code == 200
+    child_id = response.json()["created_variant_ids"][0]
+    with Session(client.app.state.engine) as session:
+        child = session.get(AudioVariant, child_id)
+
+    assert child is not None
+    assert child.variant_kind == "clipping"
+    assert child.impairment_type == "clipping"
+    assert child.processing_params["transform_kind"] == "amp_distortion"
+
+
+def test_repeated_deterministic_transform_returns_existing_child_without_failure(client, wav_factory):
+    parent = _import_ready_asset(client, wav_factory, "repeat_parent.wav")
+    payload = {"variant_ids": [parent["id"]], "transform_kind": "volume_gain", "params": {"gain_db": 6.0}}
+    first = client.post("/api/transform-jobs", json=payload)
+    assert first.status_code == 200
+    first_child_id = first.json()["created_variant_ids"][0]
+
+    second = client.post("/api/transform-jobs", json=payload)
+
+    assert second.status_code == 200
+    body = second.json()
+    assert body["status"] == "completed"
+    assert body["created_count"] == 1
+    assert body["failed_count"] == 0
+    assert body["created_variant_ids"] == [first_child_id]
+    assert body["results"] == [
+        {
+            "input_variant_id": parent["id"],
+            "status": "existing",
+            "created_variant_id": first_child_id,
+            "errors": [],
+        }
+    ]
+
+
+def test_null_numeric_transform_param_returns_clear_error(client, wav_factory):
+    parent = _import_ready_asset(client, wav_factory, "null_param_parent.wav")
+
+    response = client.post(
+        "/api/transform-jobs",
+        json={"variant_ids": [parent["id"]], "transform_kind": "volume_gain", "params": {"gain_db": None}},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert body["failed_count"] == 1
+    assert body["results"][0]["errors"] == ["gain_db must be a finite number"]

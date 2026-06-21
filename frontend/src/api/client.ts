@@ -29,7 +29,14 @@ export class ApiError extends Error {
 async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
   const contentType = response.headers.get('content-type') ?? '';
-  const body = contentType.includes('application/json') ? await response.json() : await response.text();
+  if (!contentType.includes('application/json')) {
+    const body = await response.text();
+    if (!response.ok) {
+      throw new ApiError(response.status, body);
+    }
+    throw new ApiError(response.status, `Expected JSON response but received ${contentType || 'non-JSON response'}`);
+  }
+  const body = await response.json();
   if (!response.ok) {
     const detail = typeof body === 'object' && body !== null && 'detail' in body ? (body as { detail: unknown }).detail : body;
     throw new ApiError(response.status, detail);
